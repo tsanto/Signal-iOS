@@ -18,17 +18,17 @@ NS_ASSUME_NONNULL_BEGIN
 
 @implementation OWSDynamicOutgoingMessage
 
-- (instancetype)initWithPlainTextDataBlock:(DynamicOutgoingMessageBlock)block thread:(TSThread *)thread
+- (instancetype)initWithThread:(TSThread *)thread plainTextDataBlock:(DynamicOutgoingMessageBlock)block
 {
-    return [self initWithPlainTextDataBlock:block timestamp:[NSDate ows_millisecondTimeStamp] thread:thread];
+    return [self initWithThread:thread timestamp:[NSDate ows_millisecondTimeStamp] plainTextDataBlock:block];
 }
 
 // MJK TODO can we remove sender timestamp?
-- (instancetype)initWithPlainTextDataBlock:(DynamicOutgoingMessageBlock)block
-                                 timestamp:(uint64_t)timestamp
-                                    thread:(TSThread *)thread
+- (instancetype)initWithThread:(TSThread *)thread
+                     timestamp:(uint64_t)timestamp
+            plainTextDataBlock:(DynamicOutgoingMessageBlock)block
 {
-    TSOutgoingMessageBuilder *messageBuilder = [[TSOutgoingMessageBuilder alloc] initWithThread:thread];
+    TSOutgoingMessageBuilder *messageBuilder = [TSOutgoingMessageBuilder outgoingMessageBuilderWithThread:thread];
     messageBuilder.timestamp = timestamp;
     self = [super initOutgoingMessageWithBuilder:messageBuilder];
 
@@ -44,11 +44,11 @@ NS_ASSUME_NONNULL_BEGIN
     return NO;
 }
 
-- (nullable NSData *)buildPlainTextData:(SignalRecipient *)recipient
+- (nullable NSData *)buildPlainTextData:(SignalServiceAddress *)address
                                  thread:(TSThread *)thread
                             transaction:(SDSAnyReadTransaction *)transaction
 {
-    NSData *plainTextData = self.block(recipient);
+    NSData *plainTextData = self.block(address);
     OWSAssertDebug(plainTextData);
     return plainTextData;
 }

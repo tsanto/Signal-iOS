@@ -70,9 +70,9 @@ public class ConversationHeaderView: UIStackView {
     private let avatarView: ConversationAvatarImageView
 
     @objc
-    public required init(thread: TSThread, contactsManager: OWSContactsManager) {
+    public required init(thread: TSThread) {
 
-        let avatarView = ConversationAvatarImageView(thread: thread, diameter: 36, contactsManager: contactsManager)
+        let avatarView = ConversationAvatarImageView(thread: thread, diameter: 36)
         self.avatarView = avatarView
         // remove default border on avatarView
         avatarView.layer.borderWidth = 0
@@ -102,7 +102,7 @@ public class ConversationHeaderView: UIStackView {
         textRows.distribution = .fillProportionally
         textRows.spacing = 0
 
-        textRows.layoutMargins = UIEdgeInsets(top: 0, left: 8, bottom: 0, right: 8)
+        textRows.layoutMargins = UIEdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 0)
         textRows.isLayoutMarginsRelativeArrangement = true
 
         // low content hugging so that the text rows push container to the right bar button item(s)
@@ -110,7 +110,7 @@ public class ConversationHeaderView: UIStackView {
 
         super.init(frame: .zero)
 
-        self.layoutMargins = UIEdgeInsets(top: 4, left: 2, bottom: 4, right: 2)
+        self.layoutMargins = UIEdgeInsets(top: 4, left: 0, bottom: 4, right: 0)
         self.isLayoutMarginsRelativeArrangement = true
 
         self.axis = .horizontal
@@ -146,7 +146,9 @@ public class ConversationHeaderView: UIStackView {
 
     @objc
     public func updateAvatar() {
-        self.avatarView.updateImage()
+        databaseStorage.uiRead { transaction in
+            self.avatarView.updateImage(transaction: transaction)
+        }
     }
 
     // MARK: Delegate Methods

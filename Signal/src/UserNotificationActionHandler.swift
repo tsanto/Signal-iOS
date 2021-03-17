@@ -6,7 +6,6 @@ import Foundation
 import PromiseKit
 
 @objc(OWSUserNotificationActionHandler)
-@available(iOS 10.0, *)
 public class UserNotificationActionHandler: NSObject {
 
     var actionHandler: NotificationActionHandler {
@@ -21,33 +20,35 @@ public class UserNotificationActionHandler: NSObject {
         }.done {
             completionHandler()
         }.catch { error in
-            completionHandler()
             owsFailDebug("error: \(error)")
-            Logger.error("error: \(error)")
-        }.retainUntilComplete()
+            completionHandler()
+        }
     }
 
     func handleNotificationResponse( _ response: UNNotificationResponse) throws -> Promise<Void> {
         AssertIsOnMainThread()
-        assert(AppReadiness.isAppReady())
+        assert(AppReadiness.isAppReady)
 
         let userInfo = response.notification.request.content.userInfo
+
+        let action: AppNotificationAction
 
         switch response.actionIdentifier {
         case UNNotificationDefaultActionIdentifier:
             Logger.debug("default action")
-            return try actionHandler.showThread(userInfo: userInfo)
+            let defaultActionString = userInfo[AppNotificationUserInfoKey.defaultAction] as? String
+            let defaultAction = defaultActionString.flatMap { AppNotificationAction(rawValue: $0) }
+            action = defaultAction ?? .showThread
         case UNNotificationDismissActionIdentifier:
             // TODO - mark as read?
             Logger.debug("dismissed notification")
             return Promise.value(())
         default:
-            // proceed
-            break
-        }
-
-        guard let action = UserNotificationConfig.action(identifier: response.actionIdentifier) else {
-            throw NotificationError.failDebug("unable to find action for actionIdentifier: \(response.actionIdentifier)")
+            if let responseAction = UserNotificationConfig.action(identifier: response.actionIdentifier) {
+                action = responseAction
+            } else {
+                throw OWSAssertionError("unable to find action for actionIdentifier: \(response.actionIdentifier)")
+            }
         }
 
         switch action {
@@ -61,12 +62,16 @@ public class UserNotificationActionHandler: NSObject {
             return try actionHandler.markAsRead(userInfo: userInfo)
         case .reply:
             guard let textInputResponse = response as? UNTextInputNotificationResponse else {
-                throw NotificationError.failDebug("response had unexpected type: \(response)")
+                throw OWSAssertionError("response had unexpected type: \(response)")
             }
 
             return try actionHandler.reply(userInfo: userInfo, replyText: textInputResponse.userText)
         case .showThread:
             return try actionHandler.showThread(userInfo: userInfo)
+        case .reactWithThumbsUp:
+            return try actionHandler.reactWithThumbsUp(userInfo: userInfo)
+        case .showCallLobby:
+            return try actionHandler.showCallLobby(userInfo: userInfo)
         }
     }
 }

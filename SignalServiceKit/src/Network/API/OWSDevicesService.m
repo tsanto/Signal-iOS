@@ -13,10 +13,10 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-NSString *const NSNotificationName_DeviceListUpdateSucceeded = @"NSNotificationName_DeviceListUpdateSucceeded";
-NSString *const NSNotificationName_DeviceListUpdateFailed = @"NSNotificationName_DeviceListUpdateFailed";
-NSString *const NSNotificationName_DeviceListUpdateModifiedDeviceList
-    = @"NSNotificationName_DeviceListUpdateModifiedDeviceList";
+NSNotificationName const NSNotificationNameDeviceListUpdateSucceeded = @"NSNotificationNameDeviceListUpdateSucceeded";
+NSNotificationName const NSNotificationNameDeviceListUpdateFailed = @"NSNotificationNameDeviceListUpdateFailed";
+NSNotificationName const NSNotificationNameDeviceListUpdateModifiedDeviceList
+    = @"NSNotificationNameDeviceListUpdateModifiedDeviceList";
 
 @implementation OWSDevicesService
 
@@ -34,28 +34,28 @@ NSString *const NSNotificationName_DeviceListUpdateModifiedDeviceList
                 if (devices.count > 1) {
                     // Setting this flag here shouldn't be necessary, but we do so
                     // because the "cost" is low and it will improve robustness.
-                    [OWSDeviceManager.sharedManager setMayHaveLinkedDevices];
+                    [OWSDeviceManager.shared setMayHaveLinkedDevices];
                 }
 
                 __block BOOL didAddOrRemove;
-                [self.databaseStorage writeWithBlock:^(SDSAnyWriteTransaction *transaction) {
+                DatabaseStorageWrite(self.databaseStorage, ^(SDSAnyWriteTransaction *transaction) {
                     didAddOrRemove = [OWSDevice replaceAll:devices transaction:transaction];
-                }];
+                });
 
                 [NSNotificationCenter.defaultCenter
-                    postNotificationNameAsync:NSNotificationName_DeviceListUpdateSucceeded
+                    postNotificationNameAsync:NSNotificationNameDeviceListUpdateSucceeded
                                        object:nil];
 
                 if (didAddOrRemove) {
                     [NSNotificationCenter.defaultCenter
-                        postNotificationNameAsync:NSNotificationName_DeviceListUpdateModifiedDeviceList
+                        postNotificationNameAsync:NSNotificationNameDeviceListUpdateModifiedDeviceList
                                            object:nil];
                 }
             }
             failure:^(NSError *error) {
                 OWSLogError(@"Request device list failed with error: %@", error);
 
-                [NSNotificationCenter.defaultCenter postNotificationNameAsync:NSNotificationName_DeviceListUpdateFailed
+                [NSNotificationCenter.defaultCenter postNotificationNameAsync:NSNotificationNameDeviceListUpdateFailed
                                                                        object:error];
             }];
     });
@@ -65,7 +65,7 @@ NSString *const NSNotificationName_DeviceListUpdateModifiedDeviceList
                       failure:(void (^)(NSError *))failureCallback
 {
     TSRequest *request = [OWSRequestFactory getDevicesRequest];
-    [[TSNetworkManager sharedManager] makeRequest:request
+    [[TSNetworkManager shared] makeRequest:request
         success:^(NSURLSessionDataTask *task, id responseObject) {
             OWSLogVerbose(@"Get devices request succeeded");
             NSArray<OWSDevice *> *devices = [self parseResponse:responseObject];
@@ -93,7 +93,7 @@ NSString *const NSNotificationName_DeviceListUpdateModifiedDeviceList
 {
     TSRequest *request = [OWSRequestFactory deleteDeviceRequestWithDevice:device];
 
-    [[TSNetworkManager sharedManager] makeRequest:request
+    [[TSNetworkManager shared] makeRequest:request
         success:^(NSURLSessionDataTask *task, id responseObject) {
             OWSLogVerbose(@"Delete device request succeeded");
             successCallback();

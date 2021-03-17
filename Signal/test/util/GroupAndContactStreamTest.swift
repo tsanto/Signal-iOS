@@ -11,7 +11,7 @@ class GroupAndContactStreamTest: SignalBaseTest {
     // MARK: - Dependencies
 
     private var tsAccountManager: TSAccountManager {
-        return TSAccountManager.sharedInstance()
+        TSAccountManager.shared()
     }
 
     // MARK: - Test Life Cycle
@@ -107,7 +107,7 @@ class GroupAndContactStreamTest: SignalBaseTest {
         }
     }
 
-    let outputGroupSyncData = "uQEKEHNddRc9sZVW92G7XH8DdEgaDCsxMzIxMzIxNDMyMRoMKzEzMjEzMjE0MzIzIg4KCWltYWdlL3BuZxCjATAAOgVicm93bkoOEgwrMTMyMTMyMTQzMjFKNAokMUQ0QUIwNDUtODhGQi00QzRFLTlGNkEtRjkyMTEyNEJENTI5EgwrMTMyMTMyMTQzMjNKJgokMzFDRTE0MTItOUEyOC00RTZGLUI0RUUtQTI1QzMxNzlEMDg1UAJYAIlQTkcNChoKAAAADUlIRFIAAAABAAAAAQgGAAAAHxXEiQAAAAFzUkdCAK7OHOkAAABEZVhJZk1NACoAAAAIAAGHaQAEAAAAAQAAABoAAAAAAAOgAQADAAAAAQABAACgAgAEAAAAAQAAAAGgAwAEAAAAAQAAAAEAAAAA+SKd/gAAAA1JREFUCB1j+M/A8B8ABQAB/8gPYhYAAAAASUVORK5CYIKgAQoQc222Fz2xlVb3YbtcfwN0SBIJQm9vayBDbHViGgwrMTMyMTMyMTQzMjEaDCsxNTU1MzIxNDMyMyIOCglpbWFnZS9wbmcQowEwADoJYmx1ZV9ncmV5Sg4SDCsxMzIxMzIxNDMyMUo0CiQ1NTU1NTU1NS04OEZCLTRDNEUtOUY2QS1GOTIxMTI0QkQ1MjkSDCsxNTU1MzIxNDMyM1ABWAGJUE5HDQoaCgAAAA1JSERSAAAAAQAAAAEIBgAAAB8VxIkAAAABc1JHQgCuzhzpAAAARGVYSWZNTQAqAAAACAABh2kABAAAAAEAAAAaAAAAAAADoAEAAwAAAAEAAQAAoAIABAAAAAEAAAABoAMABAAAAAEAAAABAAAAAPkinf4AAAANSURBVAgdY2Bg+P8fAAMCAf+n4VSlAAAAAElFTkSuQmCCmwEKEHN99xc9sZVW92G7XH8DdEgSCUNvb2sgQmx1YhoMKzEzMjEzMjEzMzMzGgwrMTU1NTMyMTIyMjIiDgoJaW1hZ2UvcG5nEKMBMAA6BGJsdWVKDhIMKzEzMjEzMjEzMzMzSjQKJDU1NTU1NTU1LTg4RkItNEM0RS05RjZBLTIyMjIyMjIyMjIyMhIMKzE1NTUzMjEyMjIyUABYAYlQTkcNChoKAAAADUlIRFIAAAABAAAAAQgGAAAAHxXEiQAAAAFzUkdCAK7OHOkAAABEZVhJZk1NACoAAAAIAAGHaQAEAAAAAQAAABoAAAAAAAOgAQADAAAAAQABAACgAgAEAAAAAQAAAAGgAwAEAAAAAQAAAAEAAAAA+SKd/gAAAA1JREFUCB1jYPjP8B8ABAEB/zB9GO4AAAAASUVORK5CYII="
+    let outputGroupSyncData = "awoQc111Fz2xlVb3YbtcfwN0SBoMKzEzMjEzMjE0MzIxGgwrMTMyMTMyMTQzMjMiDgoJaW1hZ2UvcG5nEKMBMAA6BWJyb3duSg4SDCsxMzIxMzIxNDMyMUoOEgwrMTMyMTMyMTQzMjNQAVgAiVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAAaADAAQAAAABAAAAAQAAAAD5Ip3+AAAADUlEQVQIHWP4z8DwHwAFAAH/yA9iFgAAAABJRU5ErkJggnoKEHNtthc9sZVW92G7XH8DdEgSCUJvb2sgQ2x1YhoMKzEzMjEzMjE0MzIxGgwrMTU1NTMyMTQzMjMiDgoJaW1hZ2UvcG5nEKMBMAA6CWJsdWVfZ3JleUoOEgwrMTMyMTMyMTQzMjFKDhIMKzE1NTUzMjE0MzIzUAJYAYlQTkcNChoKAAAADUlIRFIAAAABAAAAAQgGAAAAHxXEiQAAAAFzUkdCAK7OHOkAAABEZVhJZk1NACoAAAAIAAGHaQAEAAAAAQAAABoAAAAAAAOgAQADAAAAAQABAACgAgAEAAAAAQAAAAGgAwAEAAAAAQAAAAEAAAAA+SKd/gAAAA1JREFUCB1jYGD4/x8AAwIB/6fhVKUAAAAASUVORK5CYIJ1ChBzffcXPbGVVvdhu1x/A3RIEglDb29rIEJsdWIaDCsxMzIxMzIxMzMzMxoMKzE1NTUzMjEyMjIyIg4KCWltYWdlL3BuZxCjATAAOgRibHVlSg4SDCsxMzIxMzIxMzMzM0oOEgwrMTU1NTMyMTIyMjJQAFgBiVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAAaADAAQAAAABAAAAAQAAAAD5Ip3+AAAADUlEQVQIHWNg+M/wHwAEAQH/MH0Y7gAAAABJRU5ErkJggg=="
 
     let groupImageData1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAAaADAAQAAAABAAAAAQAAAAD5Ip3+AAAADUlEQVQIHWP4z8DwHwAFAAH/yA9iFgAAAABJRU5ErkJggg=="
     let groupImageData2 =  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAAaADAAQAAAABAAAAAQAAAAD5Ip3+AAAADUlEQVQIHWNgYPj/HwADAgH/p+FUpQAAAABJRU5ErkJggg=="
@@ -122,7 +122,6 @@ class GroupAndContactStreamTest: SignalBaseTest {
             let groupId = Data(base64Encoded: "c111Fz2xlVb3YbtcfwN0SA==")!
             let groupMembers: [SignalServiceAddress] = [
                 .init(phoneNumber: "+13213214321"),
-                .init(uuidString: "31ce1412-9a28-4e6f-b4ee-a25c3179d085"),
                 .init(uuidString: "1d4ab045-88fb-4c4e-9f6a-f921124bd529", phoneNumber: "+13213214323")
             ]
 
@@ -154,7 +153,7 @@ class GroupAndContactStreamTest: SignalBaseTest {
                 thread.shouldThreadBeVisible = true
                 thread.anyOverwritingUpdate(transaction: $0)
                 thread.updateConversationColorName(.taupe, transaction: $0)
-                thread.archiveThread(with: $0)
+                thread.archiveThread(updateStorageService: false, transaction: $0)
             }
             return thread
         }()
@@ -178,10 +177,10 @@ class GroupAndContactStreamTest: SignalBaseTest {
                 thread.updateConversationColorName(.blue, transaction: transaction)
 
                 let messageFactory = OutgoingMessageFactory()
-                messageFactory.threadCreator = { _ in return thread }
+                messageFactory.threadCreator = { _ in thread }
                 _ = messageFactory.create(transaction: transaction)
 
-                thread.archiveThread(with: transaction)
+                thread.archiveThread(updateStorageService: false, transaction: transaction)
             }
             return thread
         }()
@@ -221,16 +220,15 @@ class GroupAndContactStreamTest: SignalBaseTest {
             XCTAssertEqual(group.name, nil)
             XCTAssertEqual(group.memberAddresses, [
                 SignalServiceAddress(phoneNumber: "+13213214321"),
-                SignalServiceAddress(uuidString: "1d4ab045-88fb-4c4e-9f6a-f921124bd529", phoneNumber: "+13213214323"),
-                SignalServiceAddress(uuidString: "31ce1412-9a28-4e6f-b4ee-a25c3179d085")
-                ])
+                SignalServiceAddress(uuidString: "1d4ab045-88fb-4c4e-9f6a-f921124bd529", phoneNumber: "+13213214323")
+            ])
 
             XCTAssertEqual(group.conversationColorName, ConversationColorName.burlap.rawValue)
             XCTAssertEqual(group.isBlocked, false)
             XCTAssertEqual(group.expireTimer, 0)
             XCTAssertEqual(group.avatarData, groupAvatarData1)
             XCTAssertEqual(false, group.isArchived)
-            XCTAssertNil(group.inboxSortOrder)
+            XCTAssertEqual(1, group.inboxSortOrder)
         }
 
         do {
@@ -240,13 +238,13 @@ class GroupAndContactStreamTest: SignalBaseTest {
             XCTAssertEqual(group.memberAddresses, [
                 SignalServiceAddress(phoneNumber: "+13213214321"),
                 SignalServiceAddress(uuidString: "55555555-88fb-4c4e-9f6a-f921124bd529", phoneNumber: "+15553214323")
-                ])
+            ])
             XCTAssertEqual(group.conversationColorName, ConversationColorName.taupe.rawValue)
             XCTAssertEqual(group.isBlocked, false)
             XCTAssertEqual(group.expireTimer, 0)
             XCTAssertEqual(group.avatarData, groupAvatarData2)
             XCTAssertEqual(true, group.isArchived)
-            XCTAssertEqual(1, group.inboxSortOrder)
+            XCTAssertEqual(2, group.inboxSortOrder)
         }
 
         do {
@@ -256,7 +254,7 @@ class GroupAndContactStreamTest: SignalBaseTest {
             XCTAssertEqual(group.memberAddresses, [
                 SignalServiceAddress(phoneNumber: "+13213213333"),
                 SignalServiceAddress(uuidString: "55555555-88FB-4C4E-9F6A-222222222222", phoneNumber: "+15553212222")
-                ])
+            ])
             XCTAssertEqual(group.conversationColorName, ConversationColorName.blue.rawValue)
             XCTAssertEqual(group.isBlocked, false)
             XCTAssertEqual(group.expireTimer, 0)
@@ -280,7 +278,7 @@ class GroupAndContactStreamTest: SignalBaseTest {
             contactFactory.cnContactIdBuilder = { "123" }
             contactFactory.uniqueIdBuilder = { "123" }
 
-            signalAccount.contact = try contactFactory.build()
+            signalAccount.replaceContactForTests(try contactFactory.build())
 
             contactsOutputStream.write(signalAccount,
                                        recipientIdentity: nil,
@@ -321,65 +319,98 @@ class GroupAndContactStreamTest: SignalBaseTest {
 }
 
 class TestContactsManager: NSObject, ContactsManagerProtocol {
-    let signalAccountReadCache = SignalAccountReadCache()
+    func hasNameInSystemContacts(for address: SignalServiceAddress, transaction: SDSAnyReadTransaction) -> Bool {
+        false
+    }
+
+    func comparableName(for address: SignalServiceAddress, transaction: SDSAnyReadTransaction) -> String {
+        self.displayName(for: address)
+    }
 
     func comparableName(for signalAccount: SignalAccount, transaction: SDSAnyReadTransaction) -> String {
-        return signalAccount.recipientAddress.stringForDisplay
+        signalAccount.recipientAddress.stringForDisplay
     }
 
     func displayName(for address: SignalServiceAddress) -> String {
-        return address.stringForDisplay
+        address.stringForDisplay
     }
 
     func displayName(for address: SignalServiceAddress, transaction: SDSAnyReadTransaction) -> String {
-        return address.stringForDisplay
+        address.stringForDisplay
     }
 
     func displayName(for signalAccount: SignalAccount) -> String {
-        return signalAccount.recipientAddress.stringForDisplay
+        signalAccount.recipientAddress.stringForDisplay
     }
 
     func displayName(for thread: TSThread, transaction: SDSAnyReadTransaction) -> String {
-        return "Fake Name"
+        "Fake Name"
     }
 
     func displayNameWithSneakyTransaction(thread: TSThread) -> String {
-        return "Fake Name"
+        "Fake Name"
+    }
+
+    func shortDisplayName(for address: SignalServiceAddress, transaction: SDSAnyReadTransaction) -> String {
+        address.stringForDisplay
+    }
+
+    func conversationColorName(for address: SignalServiceAddress, transaction: SDSAnyReadTransaction) -> ConversationColorName {
+        ConversationColorName.taupe
     }
 
     func nameComponents(for address: SignalServiceAddress) -> PersonNameComponents? {
-        return PersonNameComponents()
+        PersonNameComponents()
+    }
+
+    func nameComponents(for address: SignalServiceAddress, transaction: SDSAnyReadTransaction) -> PersonNameComponents? {
+        PersonNameComponents()
     }
 
     func signalAccounts() -> [SignalAccount] {
-        return []
+        []
     }
 
     func isSystemContact(phoneNumber: String) -> Bool {
-        return true
+        true
     }
 
     func isSystemContact(address: SignalServiceAddress) -> Bool {
-        return true
+        true
     }
 
     func isSystemContact(withSignalAccount phoneNumber: String) -> Bool {
-        return true
+        true
+    }
+
+    func isSystemContact(withSignalAccount phoneNumber: String, transaction: SDSAnyReadTransaction) -> Bool {
+        true
+    }
+
+    func hasNameInSystemContacts(for address: SignalServiceAddress) -> Bool {
+        false
     }
 
     func compare(signalAccount left: SignalAccount, with right: SignalAccount) -> ComparisonResult {
-        return .orderedSame
+        .orderedSame
+    }
+
+    public func sortSignalServiceAddresses(_ addresses: [SignalServiceAddress],
+                                           transaction: SDSAnyReadTransaction) -> [SignalServiceAddress] {
+        addresses
     }
 
     func cnContact(withId contactId: String?) -> CNContact? {
-        return nil
+        nil
     }
 
     func avatarData(forCNContactId contactId: String?) -> Data? {
-        return nil
+        nil
     }
 
     func avatarImage(forCNContactId contactId: String?) -> UIImage? {
-        return nil
+        nil
     }
+
+    var unknownUserLabel: String = "unknown"
 }

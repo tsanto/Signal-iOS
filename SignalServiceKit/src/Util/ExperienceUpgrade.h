@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import <SignalServiceKit/BaseModel.h>
@@ -11,6 +11,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) NSTimeInterval firstViewedTimestamp;
 @property (nonatomic) NSTimeInterval lastSnoozedTimestamp;
 @property (nonatomic) BOOL isComplete;
+
++ (instancetype)new NS_UNAVAILABLE;
+- (instancetype)init NS_UNAVAILABLE;
+- (nullable instancetype)initWithCoder:(NSCoder *)coder NS_DESIGNATED_INITIALIZER;
+- (instancetype)initWithUniqueId:(NSString *)uniqueId NS_DESIGNATED_INITIALIZER;
+- (instancetype)initWithGrdbId:(int64_t)grdbId uniqueId:(NSString *)uniqueId NS_UNAVAILABLE;
 
 // --- CODE GENERATION MARKER
 
@@ -24,7 +30,7 @@ NS_ASSUME_NONNULL_BEGIN
             firstViewedTimestamp:(double)firstViewedTimestamp
                       isComplete:(BOOL)isComplete
             lastSnoozedTimestamp:(double)lastSnoozedTimestamp
-NS_SWIFT_NAME(init(grdbId:uniqueId:firstViewedTimestamp:isComplete:lastSnoozedTimestamp:));
+NS_DESIGNATED_INITIALIZER NS_SWIFT_NAME(init(grdbId:uniqueId:firstViewedTimestamp:isComplete:lastSnoozedTimestamp:));
 
 // clang-format on
 

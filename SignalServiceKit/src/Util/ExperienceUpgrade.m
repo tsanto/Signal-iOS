@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import "ExperienceUpgrade.h"
@@ -7,6 +7,16 @@
 NS_ASSUME_NONNULL_BEGIN
 
 @implementation ExperienceUpgrade
+
+- (nullable instancetype)initWithCoder:(NSCoder *)coder
+{
+    return [super initWithCoder:coder];
+}
+
+- (instancetype)initWithUniqueId:(NSString *)uniqueId
+{
+    return [super initWithUniqueId:uniqueId];
+}
 
 // --- CODE GENERATION MARKER
 

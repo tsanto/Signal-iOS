@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 import Foundation
@@ -20,8 +20,6 @@ protocol InteractionFinderAdapter {
 
     static func attemptingOutInteractionIds(transaction: ReadTransaction) -> [String]
 
-    static func unreadCountInAllThreads(transaction: ReadTransaction) -> UInt
-
     // The interactions should be enumerated in order from "first to expire" to "last to expire".
     static func enumerateMessagesWithStartedPerConversationExpiration(transaction: ReadTransaction, block: @escaping (TSInteraction, UnsafeMutablePointer<ObjCBool>) -> Void)
 
@@ -29,22 +27,26 @@ protocol InteractionFinderAdapter {
 
     static func enumerateMessagesWhichFailedToStartExpiring(transaction: ReadTransaction, block: @escaping (TSMessage, UnsafeMutablePointer<ObjCBool>) -> Void)
 
+    static func interactions(withInteractionIds interactionIds: Set<String>, transaction: ReadTransaction) -> Set<TSInteraction>
+
     // MARK: - instance methods
 
     func mostRecentInteractionForInbox(transaction: ReadTransaction) -> TSInteraction?
 
-    func sortIndex(interactionUniqueId: String, transaction: ReadTransaction) throws -> UInt?
+    func earliestKnownInteractionRowId(transaction: ReadTransaction) -> Int?
+
+    func distanceFromLatest(interactionUniqueId: String, transaction: ReadTransaction) throws -> UInt?
     func count(transaction: ReadTransaction) -> UInt
-    func unreadCount(transaction: ReadTransaction) -> UInt
     func enumerateInteractionIds(transaction: ReadTransaction, block: @escaping (String, UnsafeMutablePointer<ObjCBool>) throws -> Void) throws
     func enumerateRecentInteractions(transaction: ReadTransaction, block: @escaping (TSInteraction, UnsafeMutablePointer<ObjCBool>) -> Void) throws
     func enumerateInteractions(range: NSRange, transaction: ReadTransaction, block: @escaping (TSInteraction, UnsafeMutablePointer<ObjCBool>) -> Void) throws
-    func enumerateUnseenInteractions(transaction: ReadTransaction, block: @escaping (TSInteraction, UnsafeMutablePointer<ObjCBool>) -> Void) throws
-    func oldestUnseenInteraction(transaction: ReadTransaction) throws -> TSInteraction?
+    func interactionIds(inRange range: NSRange, transaction: ReadTransaction) throws -> [String]
     func existsOutgoingMessage(transaction: ReadTransaction) -> Bool
     func outgoingMessageCount(transaction: ReadTransaction) -> UInt
 
     func interaction(at index: UInt, transaction: ReadTransaction) throws -> TSInteraction?
+
+    func firstInteraction(atOrAroundSortId sortId: UInt64, transaction: ReadTransaction) -> TSInteraction?
 
     #if DEBUG
     func enumerateUnstartedExpiringMessages(transaction: ReadTransaction, block: @escaping (TSMessage, UnsafeMutablePointer<ObjCBool>) -> Void)
@@ -58,9 +60,11 @@ public class InteractionFinder: NSObject, InteractionFinderAdapter {
 
     let yapAdapter: YAPDBInteractionFinderAdapter
     let grdbAdapter: GRDBInteractionFinder
+    let threadUniqueId: String
 
     @objc
     public init(threadUniqueId: String) {
+        self.threadUniqueId = threadUniqueId
         self.yapAdapter = YAPDBInteractionFinderAdapter(threadUniqueId: threadUniqueId)
         self.grdbAdapter = GRDBInteractionFinder(threadUniqueId: threadUniqueId)
     }
@@ -131,12 +135,40 @@ public class InteractionFinder: NSObject, InteractionFinderAdapter {
     }
 
     @objc
-    public class func unreadCountInAllThreads(transaction: SDSAnyReadTransaction) -> UInt {
-        switch transaction.readTransaction {
-        case .yapRead(let yapRead):
-            return YAPDBInteractionFinderAdapter.unreadCountInAllThreads(transaction: yapRead)
-        case .grdbRead(let grdbRead):
-            return GRDBInteractionFinder.unreadCountInAllThreads(transaction: grdbRead)
+    public class func unreadCountInAllThreads(transaction: GRDBReadTransaction) -> UInt {
+        do {
+            var unreadInteractionQuery = """
+                SELECT COUNT(interaction.\(interactionColumn: .id))
+                FROM \(InteractionRecord.databaseTableName) AS interaction
+            """
+
+            if !SSKPreferences.includeMutedThreadsInBadgeCount(transaction: transaction.asAnyRead) {
+                unreadInteractionQuery += " \(sqlClauseForIgnoringInteractionsWithMutedThread) "
+            }
+
+            unreadInteractionQuery += " WHERE \(sqlClauseForUnreadInteractionCounts(interactionsAlias: "interaction")) "
+
+            guard let unreadInteractionCount = try UInt.fetchOne(transaction.database, sql: unreadInteractionQuery) else {
+                owsFailDebug("unreadInteractionCount was unexpectedly nil")
+                return 0
+            }
+
+            let markedUnreadThreadQuery = """
+                SELECT COUNT(*)
+                FROM \(ThreadRecord.databaseTableName)
+                WHERE \(threadColumn: .isMarkedUnread) = 1
+                AND \(threadColumn: .shouldThreadBeVisible) = 1
+            """
+
+            guard let markedUnreadCount = try UInt.fetchOne(transaction.database, sql: markedUnreadThreadQuery) else {
+                owsFailDebug("markedUnreadCount was unexpectedly nil")
+                return unreadInteractionCount
+            }
+
+            return unreadInteractionCount + markedUnreadCount
+        } catch {
+            owsFailDebug("error: \(error)")
+            return 0
         }
     }
 
@@ -168,6 +200,16 @@ public class InteractionFinder: NSObject, InteractionFinderAdapter {
             YAPDBInteractionFinderAdapter.enumerateMessagesWhichFailedToStartExpiring(transaction: yapRead, block: block)
         case .grdbRead(let grdbRead):
             GRDBInteractionFinder.enumerateMessagesWhichFailedToStartExpiring(transaction: grdbRead, block: block)
+        }
+    }
+
+    @objc
+    public class func interactions(withInteractionIds interactionIds: Set<String>, transaction: SDSAnyReadTransaction) -> Set<TSInteraction> {
+        switch transaction.readTransaction {
+        case .yapRead(let yapRead):
+            return YAPDBInteractionFinderAdapter.interactions(withInteractionIds: interactionIds, transaction: yapRead)
+        case .grdbRead(let grdbRead):
+            return GRDBInteractionFinder.interactions(withInteractionIds: interactionIds, transaction: grdbRead)
         }
     }
 
@@ -240,13 +282,22 @@ public class InteractionFinder: NSObject, InteractionFinderAdapter {
         }
     }
 
-    public func sortIndex(interactionUniqueId: String, transaction: SDSAnyReadTransaction) throws -> UInt? {
-        return try Bench(title: "sortIndex") {
+    func earliestKnownInteractionRowId(transaction: SDSAnyReadTransaction) -> Int? {
+        switch transaction.readTransaction {
+        case .yapRead(let yapRead):
+            return yapAdapter.earliestKnownInteractionRowId(transaction: yapRead)
+        case .grdbRead(let grdbRead):
+            return grdbAdapter.earliestKnownInteractionRowId(transaction: grdbRead)
+        }
+    }
+
+    public func distanceFromLatest(interactionUniqueId: String, transaction: SDSAnyReadTransaction) throws -> UInt? {
+        return try Bench(title: "InteractionFinder.distanceFromLatest") {
             switch transaction.readTransaction {
             case .yapRead(let yapRead):
-                return yapAdapter.sortIndex(interactionUniqueId: interactionUniqueId, transaction: yapRead)
+                return yapAdapter.distanceFromLatest(interactionUniqueId: interactionUniqueId, transaction: yapRead)
             case .grdbRead(let grdbRead):
-                return try grdbAdapter.sortIndex(interactionUniqueId: interactionUniqueId, transaction: grdbRead)
+                return try grdbAdapter.distanceFromLatest(interactionUniqueId: interactionUniqueId, transaction: grdbRead)
             }
         }
     }
@@ -262,12 +313,26 @@ public class InteractionFinder: NSObject, InteractionFinderAdapter {
     }
 
     @objc
-    public func unreadCount(transaction: SDSAnyReadTransaction) -> UInt {
-        switch transaction.readTransaction {
-        case .yapRead(let yapRead):
-            return yapAdapter.unreadCount(transaction: yapRead)
-        case .grdbRead(let grdbRead):
-            return grdbAdapter.unreadCount(transaction: grdbRead)
+    public func unreadCount(transaction: GRDBReadTransaction) -> UInt {
+        do {
+            let sql = """
+                SELECT COUNT(*)
+                FROM \(InteractionRecord.databaseTableName)
+                WHERE \(interactionColumn: .threadUniqueId) = ?
+                AND \(InteractionFinder.sqlClauseForUnreadInteractionCounts())
+            """
+            let arguments: StatementArguments = [threadUniqueId]
+
+            guard let count = try UInt.fetchOne(transaction.database,
+                                                sql: sql,
+                                                arguments: arguments) else {
+                    owsFailDebug("count was unexpectedly nil")
+                    return 0
+            }
+            return count
+        } catch {
+            owsFailDebug("error: \(error)")
+            return 0
         }
     }
 
@@ -309,23 +374,128 @@ public class InteractionFinder: NSObject, InteractionFinderAdapter {
         }
     }
 
-    @objc
-    public func enumerateUnseenInteractions(transaction: SDSAnyReadTransaction, block: @escaping (TSInteraction, UnsafeMutablePointer<ObjCBool>) -> Void) throws {
+    public func interactionIds(inRange range: NSRange, transaction: SDSAnyReadTransaction) throws -> [String] {
         switch transaction.readTransaction {
         case .yapRead(let yapRead):
-            return try yapAdapter.enumerateUnseenInteractions(transaction: yapRead, block: block)
+        owsFailDebug("Invalid transaction.")
+            return try yapAdapter.interactionIds(inRange: range, transaction: yapRead)
         case .grdbRead(let grdbRead):
-            return try grdbAdapter.enumerateUnseenInteractions(transaction: grdbRead, block: block)
+            return try grdbAdapter.interactionIds(inRange: range, transaction: grdbRead)
         }
     }
 
-    public func oldestUnseenInteraction(transaction: SDSAnyReadTransaction) throws -> TSInteraction? {
-        switch transaction.readTransaction {
-        case .yapRead(let yapRead):
-            return try yapAdapter.oldestUnseenInteraction(transaction: yapRead)
-        case .grdbRead(let grdbRead):
-            return try grdbAdapter.oldestUnseenInteraction(transaction: grdbRead)
+    /// Returns all the unread interactions in this thread
+    @objc
+    public func allUnreadMessages(transaction: GRDBReadTransaction) -> [OWSReadTracking] {
+        let sql = """
+            SELECT *
+            FROM \(InteractionRecord.databaseTableName)
+            WHERE \(interactionColumn: .threadUniqueId) = ?
+            AND \(sqlClauseForAllUnreadInteractions)
+        """
+
+        let cursor = TSInteraction.grdbFetchCursor(sql: sql, arguments: [threadUniqueId], transaction: transaction)
+
+        var readTrackingMessages = [OWSReadTracking]()
+
+        do {
+            while let interaction = try cursor.next() {
+                guard let readTracking = interaction as? OWSReadTracking else {
+                    owsFailDebug("Interaction has unexpected type: \(type(of: interaction))")
+                    continue
+                }
+                guard !readTracking.wasRead else {
+                    owsFailDebug("Unexpectedly found read interaction: \(interaction.timestamp)")
+                    continue
+                }
+                readTrackingMessages.append(readTracking)
+            }
+        } catch {
+            owsFailDebug("unexpected error \(error)")
         }
+
+        return readTrackingMessages
+    }
+
+    /// Returns all the unread interactions in this thread before a given sort id
+    @objc
+    public func unreadMessages(
+        beforeSortId: UInt64,
+        transaction: GRDBReadTransaction
+    ) -> [OWSReadTracking] {
+        let sql = """
+            SELECT *
+            FROM \(InteractionRecord.databaseTableName)
+            WHERE \(interactionColumn: .threadUniqueId) = ?
+            AND \(interactionColumn: .id) <= ?
+            AND \(sqlClauseForAllUnreadInteractions)
+        """
+
+        let cursor = TSInteraction.grdbFetchCursor(sql: sql, arguments: [threadUniqueId, beforeSortId], transaction: transaction)
+
+        var readTrackingMessages = [OWSReadTracking]()
+
+        do {
+            while let interaction = try cursor.next() {
+                guard let readTracking = interaction as? OWSReadTracking else {
+                    owsFailDebug("Interaction has unexpected type: \(type(of: interaction))")
+                    continue
+                }
+                guard !readTracking.wasRead else {
+                    owsFailDebug("Unexpectedly found read interaction: \(interaction.timestamp)")
+                    continue
+                }
+                readTrackingMessages.append(readTracking)
+            }
+        } catch {
+            owsFailDebug("unexpected error \(error)")
+        }
+
+        return readTrackingMessages
+    }
+
+    /// Returns all the messages with unread reactions in this thread before a given sort id
+    @objc
+    public func messagesWithUnreadReactions(
+        beforeSortId: UInt64,
+        transaction: GRDBReadTransaction
+    ) -> [TSOutgoingMessage] {
+        let sql = """
+            SELECT interaction.*
+            FROM \(InteractionRecord.databaseTableName) AS interaction
+            INNER JOIN \(ReactionRecord.databaseTableName) AS reaction
+                ON interaction.\(interactionColumn: .uniqueId) = reaction.\(reactionColumn: .uniqueMessageId)
+                AND reaction.\(reactionColumn: .read) IS 0
+            WHERE interaction.\(interactionColumn: .recordType) IS \(SDSRecordType.outgoingMessage.rawValue)
+            AND interaction.\(interactionColumn: .threadUniqueId) = ?
+            AND interaction.\(interactionColumn: .id) <= ?
+        """
+
+        let cursor = TSOutgoingMessage.grdbFetchCursor(sql: sql, arguments: [threadUniqueId, beforeSortId], transaction: transaction)
+
+        var messages = [TSOutgoingMessage]()
+
+        do {
+            while let message = try cursor.next() as? TSOutgoingMessage {
+                messages.append(message)
+            }
+        } catch {
+            owsFailDebug("unexpected error \(error)")
+        }
+
+        return messages
+    }
+
+    public func oldestUnreadInteraction(transaction: GRDBReadTransaction) throws -> TSInteraction? {
+        let sql = """
+            SELECT *
+            FROM \(InteractionRecord.databaseTableName)
+            WHERE \(interactionColumn: .threadUniqueId) = ?
+            AND \(sqlClauseForAllUnreadInteractions)
+            ORDER BY \(interactionColumn: .id)
+        """
+        let cursor = TSInteraction.grdbFetchCursor(sql: sql, arguments: [threadUniqueId], transaction: transaction)
+        return try cursor.next()
     }
 
     public func interaction(at index: UInt, transaction: SDSAnyReadTransaction) throws -> TSInteraction? {
@@ -334,6 +504,16 @@ public class InteractionFinder: NSObject, InteractionFinderAdapter {
             return yapAdapter.interaction(at: index, transaction: yapRead)
         case .grdbRead(let grdbRead):
             return try grdbAdapter.interaction(at: index, transaction: grdbRead)
+        }
+    }
+
+    @objc
+    public func firstInteraction(atOrAroundSortId sortId: UInt64, transaction: SDSAnyReadTransaction) -> TSInteraction? {
+        switch transaction.readTransaction {
+        case .yapRead:
+            fatalError("YAP not supported")
+        case .grdbRead(let grdbRead):
+            return grdbAdapter.firstInteraction(atOrAroundSortId: sortId, transaction: grdbRead)
         }
     }
 
@@ -368,6 +548,63 @@ public class InteractionFinder: NSObject, InteractionFinderAdapter {
             return grdbAdapter.outgoingMessageCount(transaction: grdbRead)
         }
     }
+
+    // MARK: - Unread
+
+    private let sqlClauseForAllUnreadInteractions: String = {
+        let recordTypes: [SDSRecordType] = [
+            .disappearingConfigurationUpdateInfoMessage,
+            .unknownProtocolVersionMessage,
+            .verificationStateChangeMessage,
+            .call,
+            .errorMessage,
+            .incomingMessage,
+            .infoMessage,
+            .invalidIdentityKeyErrorMessage,
+            .invalidIdentityKeyReceivingErrorMessage,
+            .invalidIdentityKeySendingErrorMessage
+        ]
+
+        let recordTypesSql = recordTypes.map { "\($0.rawValue)" }.joined(separator: ",")
+
+        return """
+        (
+            \(interactionColumn: .read) IS 0
+            AND \(interactionColumn: .recordType) IN (\(recordTypesSql))
+        )
+        """
+    }()
+
+    private static func sqlClauseForUnreadInteractionCounts(interactionsAlias: String? = nil) -> String {
+        let columnPrefix: String
+        if let interactionsAlias = interactionsAlias {
+            columnPrefix = interactionsAlias + "."
+        } else {
+            columnPrefix = ""
+        }
+
+        return """
+        \(columnPrefix)\(interactionColumn: .read) IS 0
+        AND (
+            \(columnPrefix)\(interactionColumn: .recordType) IN (\(SDSRecordType.incomingMessage.rawValue), \(SDSRecordType.call.rawValue))
+            OR (
+                \(columnPrefix)\(interactionColumn: .recordType) IS \(SDSRecordType.infoMessage.rawValue)
+                AND \(columnPrefix)\(interactionColumn: .messageType) IS \(TSInfoMessageType.userJoinedSignal.rawValue)
+            )
+        )
+        """
+    }
+
+    private static let sqlClauseForIgnoringInteractionsWithMutedThread: String = {
+        return """
+        INNER JOIN \(ThreadRecord.databaseTableName) AS thread
+        ON \(interactionColumn: .threadUniqueId) = thread.\(threadColumn: .uniqueId)
+        AND (
+            thread.\(threadColumn: .mutedUntilDate) <= strftime('%s','now')
+            OR thread.\(threadColumn: .mutedUntilDate) IS NULL
+        )
+        """
+    }()
 }
 
 // MARK: -
@@ -399,13 +636,6 @@ struct YAPDBInteractionFinderAdapter: InteractionFinderAdapter {
         return OWSFailedMessagesJob.attemptingOutMessageIds(with: transaction)
     }
 
-    static func unreadCountInAllThreads(transaction: YapDatabaseReadTransaction) -> UInt {
-        guard let view = unreadExt(transaction) else {
-            return 0
-        }
-        return view.numberOfItemsInAllGroups()
-    }
-
     static func interactions(withTimestamp timestamp: UInt64, filter: @escaping (TSInteraction) -> Bool, transaction: YapDatabaseReadTransaction) throws -> [TSInteraction] {
         return TSInteraction.ydb_interactions(withTimestamp: timestamp,
                                               filter: filter,
@@ -425,6 +655,10 @@ struct YAPDBInteractionFinderAdapter: InteractionFinderAdapter {
         OWSDisappearingMessagesFinder.ydb_enumerateMessagesWhichFailedToStartExpiring(block, transaction: transaction)
     }
 
+    static func interactions(withInteractionIds interactionIds: Set<String>, transaction: YapDatabaseReadTransaction) -> Set<TSInteraction> {
+        owsFail("Not implemented.")
+    }
+
     // MARK: - instance methods
 
     func mostRecentInteractionForInbox(transaction: YapDatabaseReadTransaction) -> TSInteraction? {
@@ -440,7 +674,7 @@ struct YAPDBInteractionFinderAdapter: InteractionFinderAdapter {
                 owsFailDebug("unexpected interaction: \(type(of: object))")
                 return
             }
-            if TSThread.shouldInteractionAppear(inInbox: interaction) {
+            if interaction.shouldAppearInInbox(transaction: transaction.asAnyRead) {
                 last = interaction
                 stopPtr.pointee = true
             }
@@ -458,6 +692,10 @@ struct YAPDBInteractionFinderAdapter: InteractionFinderAdapter {
         return last
     }
 
+    func earliestKnownInteractionRowId(transaction: YapDatabaseReadTransaction) -> Int? {
+        fatalError("yap not supported")
+    }
+
     func count(transaction: YapDatabaseReadTransaction) -> UInt {
         guard let view = interactionExt(transaction) else {
             return 0
@@ -465,25 +703,9 @@ struct YAPDBInteractionFinderAdapter: InteractionFinderAdapter {
         return view.numberOfItems(inGroup: threadUniqueId)
     }
 
-    func unreadCount(transaction: YapDatabaseReadTransaction) -> UInt {
-        guard let view = unreadExt(transaction) else {
-            return 0
-        }
-        return view.numberOfItems(inGroup: threadUniqueId)
-    }
-
-    func sortIndex(interactionUniqueId: String, transaction: YapDatabaseReadTransaction) -> UInt? {
-        var index: UInt = 0
-        guard let view = interactionExt(transaction) else {
-            return nil
-        }
-        let wasFound = view.getGroup(nil, index: &index, forKey: interactionUniqueId, inCollection: collection)
-
-        guard wasFound else {
-            return nil
-        }
-
-        return index
+    func distanceFromLatest(interactionUniqueId: String, transaction: YapDatabaseReadTransaction) -> UInt? {
+        owsFailDebug("unsupported transction")
+        return nil
     }
 
     func enumerateInteractionIds(transaction: YapDatabaseReadTransaction, block: @escaping (String, UnsafeMutablePointer<ObjCBool>) throws -> Void) throws {
@@ -536,38 +758,9 @@ struct YAPDBInteractionFinderAdapter: InteractionFinderAdapter {
         }
     }
 
-    func enumerateUnseenInteractions(transaction: YapDatabaseReadTransaction, block: @escaping (TSInteraction, UnsafeMutablePointer<ObjCBool>) -> Void) throws {
-        guard let view = unseenExt(transaction) else {
-            return
-        }
-        // `isOrdered` is unused for yap. Views are always ordered.
-        view.safe_enumerateKeysAndObjects(inGroup: threadUniqueId,
-                                          extensionName: TSUnseenDatabaseViewExtensionName,
-                                          with: []) { (_, _, object, _, stopPtr) in
-                                            guard let interaction = object as? TSInteraction else {
-                                                owsFailDebug("unexpected interaction: \(type(of: object))")
-                                                return
-                                            }
-            block(interaction, stopPtr)
-        }
-    }
-
-    func oldestUnseenInteraction(transaction: YapDatabaseReadTransaction) throws -> TSInteraction? {
-        guard let view = unseenExt(transaction) else {
-            return nil
-        }
-        var result: TSInteraction?
-        view.safe_enumerateKeysAndObjects(inGroup: threadUniqueId,
-                                          extensionName: TSUnseenDatabaseViewExtensionName,
-                                          with: []) { (_, _, object, _, stopPtr) in
-                                            guard let interaction = object as? TSInteraction else {
-                                                owsFailDebug("unexpected interaction: \(type(of: object))")
-                                                return
-                                            }
-                                            result = interaction
-                                            stopPtr.pointee = true
-        }
-        return result
+    public func interactionIds(inRange range: NSRange, transaction: YapDatabaseReadTransaction) throws -> [String] {
+        owsFailDebug("Invalid transaction.")
+        return []
     }
 
     func interaction(at index: UInt, transaction: YapDatabaseReadTransaction) -> TSInteraction? {
@@ -584,6 +777,10 @@ struct YAPDBInteractionFinderAdapter: InteractionFinderAdapter {
         }
 
         return interaction
+    }
+
+    func firstInteraction(atOrAroundSortId sortId: UInt64, transaction: YapDatabaseReadTransaction) -> TSInteraction? {
+        fatalError("YAP not supported")
     }
 
     func existsOutgoingMessage(transaction: YapDatabaseReadTransaction) -> Bool {
@@ -616,20 +813,8 @@ struct YAPDBInteractionFinderAdapter: InteractionFinderAdapter {
         return TSInteraction.collection()
     }
 
-    private static func unreadExt(_ transaction: YapDatabaseReadTransaction) -> YapDatabaseViewTransaction? {
-        return transaction.safeViewTransaction(TSUnreadDatabaseViewExtensionName)
-    }
-
-    private func unreadExt(_ transaction: YapDatabaseReadTransaction) -> YapDatabaseViewTransaction? {
-        return YAPDBInteractionFinderAdapter.unreadExt(transaction)
-    }
-
     private func interactionExt(_ transaction: YapDatabaseReadTransaction) -> YapDatabaseViewTransaction? {
         return transaction.safeViewTransaction(TSMessageDatabaseViewExtensionName)
-    }
-
-    private func unseenExt(_ transaction: YapDatabaseReadTransaction) -> YapDatabaseViewTransaction? {
-        return transaction.safeViewTransaction(TSUnseenDatabaseViewExtensionName)
     }
 }
 
@@ -724,6 +909,50 @@ public class GRDBInteractionFinder: NSObject, InteractionFinderAdapter {
         return result
     }
 
+    public static func existsGroupCallMessageForEraId(_ eraId: String, thread: TSThread, transaction: SDSAnyReadTransaction) -> Bool {
+        let sql = """
+        SELECT EXISTS(
+            SELECT 1
+            FROM \(InteractionRecord.databaseTableName)
+            WHERE \(interactionColumn: .recordType) IS \(SDSRecordType.groupCallMessage.rawValue)
+            AND \(interactionColumn: .threadUniqueId) = ?
+            AND \(interactionColumn: .eraId) = ?
+            LIMIT 1
+        )
+        """
+        let arguments: StatementArguments = [thread.uniqueId, eraId]
+        return try! Bool.fetchOne(transaction.unwrapGrdbRead.database, sql: sql, arguments: arguments) ?? false
+    }
+
+    public static func unendedCallsForGroupThread(_ thread: TSThread, transaction: SDSAnyReadTransaction) -> [OWSGroupCallMessage] {
+        let sql: String = """
+        SELECT *
+        FROM \(InteractionRecord.databaseTableName)
+        WHERE \(interactionColumn: .recordType) IS \(SDSRecordType.groupCallMessage.rawValue)
+        AND \(interactionColumn: .hasEnded) IS FALSE
+        AND \(interactionColumn: .threadUniqueId) = ?
+        """
+
+        var groupCalls: [OWSGroupCallMessage] = []
+        let cursor = OWSGroupCallMessage.grdbFetchCursor(
+            sql: sql,
+            arguments: [thread.uniqueId],
+            transaction: transaction.unwrapGrdbRead)
+
+        do {
+            while let interaction = try cursor.next() {
+                guard let groupCall = interaction as? OWSGroupCallMessage, !groupCall.hasEnded else {
+                    owsFailDebug("Unexpectedly result: \(interaction.timestamp)")
+                    continue
+                }
+                groupCalls.append(groupCall)
+            }
+        } catch {
+            owsFailDebug("unexpected error \(error)")
+        }
+        return groupCalls
+    }
+
     static func attemptingOutInteractionIds(transaction: ReadTransaction) -> [String] {
         let sql: String = """
         SELECT \(interactionColumn: .uniqueId)
@@ -739,24 +968,6 @@ public class GRDBInteractionFinder: NSObject, InteractionFinderAdapter {
             owsFailDebug("error: \(error)")
         }
         return result
-    }
-
-    static func unreadCountInAllThreads(transaction: ReadTransaction) -> UInt {
-        do {
-            let sql = """
-                SELECT COUNT(*)
-                FROM \(InteractionRecord.databaseTableName)
-                WHERE \(sqlClauseForUnreadInteractionCounts)
-            """
-            guard let count = try UInt.fetchOne(transaction.database, sql: sql) else {
-                owsFailDebug("count was unexpectedly nil")
-                return 0
-            }
-            return count
-        } catch {
-            owsFailDebug("error: \(error)")
-            return 0
-        }
     }
 
     // The interactions should be enumerated in order from "next to expire" to "last to expire".
@@ -838,39 +1049,134 @@ public class GRDBInteractionFinder: NSObject, InteractionFinderAdapter {
         }
     }
 
+    static func interactions(withInteractionIds interactionIds: Set<String>, transaction: GRDBReadTransaction) -> Set<TSInteraction> {
+        guard !interactionIds.isEmpty else {
+            return []
+        }
+
+        let sql = """
+            SELECT * FROM \(InteractionRecord.databaseTableName)
+            WHERE \(interactionColumn: .uniqueId) IN (\(interactionIds.map { "\'\($0)'" }.joined(separator: ",")))
+        """
+        let arguments: StatementArguments = []
+        let cursor = TSInteraction.grdbFetchCursor(sql: sql, arguments: arguments, transaction: transaction)
+        var interactions = Set<TSInteraction>()
+        do {
+            while let interaction = try cursor.next() {
+                interactions.insert(interaction)
+            }
+        } catch {
+            owsFailDebug("unexpected error \(error)")
+        }
+        return interactions
+    }
+
     // MARK: - instance methods
 
+    public func profileUpdateInteractions(afterSortId sortId: UInt64, transaction: GRDBReadTransaction) -> [TSInfoMessage] {
+        let cursor = TSInteraction.grdbFetchCursor(
+            sql: """
+                SELECT *
+                FROM \(InteractionRecord.databaseTableName)
+                WHERE \(interactionColumn: .threadUniqueId) = ?
+                AND \(interactionColumn: .messageType) = ?
+                AND \(interactionColumn: .id) > ?
+            """,
+            arguments: [threadUniqueId, TSInfoMessageType.profileUpdate.rawValue, sortId],
+            transaction: transaction)
+
+        let allResults: [TSInteraction]
+        do {
+            // Every result should be an info message with associated profile changes
+            allResults = try cursor.all()
+            owsAssertDebug(allResults.allSatisfy({ ($0 as? TSInfoMessage)?.profileChangeAddress != nil }))
+        } catch {
+            owsFailDebug("Unexpected error \(error)")
+            allResults = []
+        }
+
+        return allResults.compactMap { $0 as? TSInfoMessage }
+    }
+
     func mostRecentInteractionForInbox(transaction: GRDBReadTransaction) -> TSInteraction? {
-        let sql = """
+        let interactionsSql = """
                 SELECT *
                 FROM \(InteractionRecord.databaseTableName)
                 WHERE \(interactionColumn: .threadUniqueId) = ?
                 AND \(interactionColumn: .errorType) IS NOT ?
                 AND \(interactionColumn: .messageType) IS NOT ?
+                AND \(interactionColumn: .messageType) IS NOT ?
                 ORDER BY \(interactionColumn: .id) DESC
-                LIMIT 1
                 """
+        let firstInteractionSql = interactionsSql + " LIMIT 1"
         let arguments: StatementArguments = [threadUniqueId,
                                              TSErrorMessageType.nonBlockingIdentityChange.rawValue,
-                                             TSInfoMessageType.verificationStateChange.rawValue]
-        return TSInteraction.grdbFetchOne(sql: sql, arguments: arguments, transaction: transaction)
+                                             TSInfoMessageType.verificationStateChange.rawValue,
+                                             TSInfoMessageType.profileUpdate.rawValue]
+        guard let firstInteraction = TSInteraction.grdbFetchOne(sql: firstInteractionSql,
+                                                                arguments: arguments,
+                                                                transaction: transaction) else {
+            return nil
+        }
+
+        // We can't exclude specific group updates in the query.
+        // In the (mildly) rare case that the most recent message
+        // is a group update that shouldn't be shown,
+        // we iterate backward until we find a good interaction.
+        let anyTransaction = transaction.asAnyRead
+        if firstInteraction.shouldAppearInInbox(transaction: anyTransaction) {
+            return firstInteraction
+        }
+        do {
+            let cursor = TSInteraction.grdbFetchCursor(sql: interactionsSql,
+                                                       arguments: arguments,
+                                                       transaction: transaction)
+            while let interaction = try cursor.next() {
+                if interaction.shouldAppearInInbox(transaction: anyTransaction) {
+                    return interaction
+                }
+            }
+            return nil
+        } catch {
+            owsFailDebug("Error: \(error)")
+            return nil
+        }
     }
 
-    func sortIndex(interactionUniqueId: String, transaction: GRDBReadTransaction) throws -> UInt? {
-        return try UInt.fetchOne(transaction.database,
-                                 sql: """
-            SELECT sortIndex
-            FROM (
-                SELECT
-                    ROW_NUMBER() OVER (ORDER BY \(interactionColumn: .id)) - 1 as sortIndex,
-                    \(interactionColumn: .id),
-                    \(interactionColumn: .uniqueId)
+    func earliestKnownInteractionRowId(transaction: GRDBReadTransaction) -> Int? {
+        let sql = """
+                SELECT \(interactionColumn: .id)
                 FROM \(InteractionRecord.databaseTableName)
                 WHERE \(interactionColumn: .threadUniqueId) = ?
-            )
+                ORDER BY \(interactionColumn: .id) ASC
+                LIMIT 1
+                """
+        let arguments: StatementArguments = [threadUniqueId]
+        return try? Int.fetchOne(transaction.database, sql: sql, arguments: arguments)
+    }
+
+    func distanceFromLatest(interactionUniqueId: String, transaction: GRDBReadTransaction) throws -> UInt? {
+        guard let interactionId = try UInt.fetchOne(transaction.database, sql: """
+            SELECT id
+            FROM \(InteractionRecord.databaseTableName)
             WHERE \(interactionColumn: .uniqueId) = ?
-            """,
-            arguments: [threadUniqueId, interactionUniqueId])
+        """, arguments: [interactionUniqueId]) else {
+            owsFailDebug("failed to find id for interaction \(interactionUniqueId)")
+            return nil
+        }
+
+        guard let distanceFromLatest = try UInt.fetchOne(transaction.database, sql: """
+            SELECT count(*) - 1
+            FROM \(InteractionRecord.databaseTableName)
+            WHERE \(interactionColumn: .threadUniqueId) = ?
+            AND \(interactionColumn: .id) >= ?
+            ORDER BY \(interactionColumn: .id) DESC
+        """, arguments: [threadUniqueId, interactionId]) else {
+            owsFailDebug("failed to find distance from latest message")
+            return nil
+        }
+
+        return distanceFromLatest
     }
 
     func count(transaction: GRDBReadTransaction) -> UInt {
@@ -882,34 +1188,11 @@ public class GRDBInteractionFinder: NSObject, InteractionFinderAdapter {
                 WHERE \(interactionColumn: .threadUniqueId) = ?
                 """,
                 arguments: [threadUniqueId]) else {
-                    throw assertionError("count was unexpectedly nil")
+                    throw OWSAssertionError("count was unexpectedly nil")
             }
             return count
         } catch {
             owsFail("error: \(error)")
-        }
-    }
-
-    func unreadCount(transaction: GRDBReadTransaction) -> UInt {
-        do {
-            let sql = """
-                SELECT COUNT(*)
-                FROM \(InteractionRecord.databaseTableName)
-                WHERE \(interactionColumn: .threadUniqueId) = ?
-                AND \(GRDBInteractionFinder.sqlClauseForUnreadInteractionCounts)
-            """
-            let arguments: StatementArguments = [threadUniqueId]
-
-            guard let count = try UInt.fetchOne(transaction.database,
-                                                sql: sql,
-                                                arguments: arguments) else {
-                    owsFailDebug("count was unexpectedly nil")
-                    return 0
-            }
-            return count
-        } catch {
-            owsFailDebug("error: \(error)")
-            return 0
         }
     }
 
@@ -976,26 +1259,19 @@ public class GRDBInteractionFinder: NSObject, InteractionFinderAdapter {
         }
     }
 
-    func enumerateUnseenInteractions(transaction: GRDBReadTransaction, block: @escaping (TSInteraction, UnsafeMutablePointer<ObjCBool>) -> Void) throws {
-
+    func interactionIds(inRange range: NSRange, transaction: GRDBReadTransaction) throws -> [String] {
         let sql = """
-            SELECT *
-            FROM \(InteractionRecord.databaseTableName)
-            WHERE \(interactionColumn: .threadUniqueId) = ?
-            AND \(sqlClauseForAllUnreadInteractions)
+        SELECT \(interactionColumn: .uniqueId)
+        FROM \(InteractionRecord.databaseTableName)
+        WHERE \(interactionColumn: .threadUniqueId) = ?
+        ORDER BY \(interactionColumn: .id)
+        LIMIT \(range.length)
+        OFFSET \(range.location)
         """
         let arguments: StatementArguments = [threadUniqueId]
-        let cursor = TSInteraction.grdbFetchCursor(sql: sql, arguments: arguments, transaction: transaction)
-        while let interaction = try cursor.next() {
-            var stop: ObjCBool = false
-            if interaction as? OWSReadTracking == nil {
-                owsFailDebug("Interaction has unexpected type: \(type(of: interaction))")
-            }
-            block(interaction, &stop)
-            if stop.boolValue {
-                return
-            }
-        }
+        return try String.fetchAll(transaction.database,
+                                   sql: sql,
+                                   arguments: arguments)
     }
 
     @objc
@@ -1033,18 +1309,6 @@ public class GRDBInteractionFinder: NSObject, InteractionFinderAdapter {
         }
     }
 
-    func oldestUnseenInteraction(transaction: GRDBReadTransaction) throws -> TSInteraction? {
-        let sql = """
-        SELECT *
-        FROM \(InteractionRecord.databaseTableName)
-        WHERE \(interactionColumn: .threadUniqueId) = ?
-        AND \(sqlClauseForAllUnreadInteractions)
-        ORDER BY \(interactionColumn: .id)
-        """
-        let cursor = TSInteraction.grdbFetchCursor(sql: sql, arguments: [threadUniqueId], transaction: transaction)
-        return try cursor.next()
-    }
-
     func interaction(at index: UInt, transaction: GRDBReadTransaction) throws -> TSInteraction? {
         let sql = """
         SELECT *
@@ -1056,6 +1320,48 @@ public class GRDBInteractionFinder: NSObject, InteractionFinderAdapter {
         """
         let arguments: StatementArguments = [threadUniqueId, index]
         return TSInteraction.grdbFetchOne(sql: sql, arguments: arguments, transaction: transaction)
+    }
+
+    func firstInteraction(atOrAroundSortId sortId: UInt64, transaction: GRDBReadTransaction) -> TSInteraction? {
+        guard sortId > 0 else { return nil }
+
+        // First, see if there's an interaction at or before this sortId.
+
+        let atOrBeforeQuery = """
+        SELECT *
+        FROM \(InteractionRecord.databaseTableName)
+        WHERE \(interactionColumn: .threadUniqueId) = ?
+        AND \(interactionColumn: .id) <= ?
+        ORDER BY \(interactionColumn: .id) DESC
+        LIMIT 1
+        """
+        let arguments: StatementArguments = [threadUniqueId, sortId]
+
+        if let interactionAtOrBeforeSortId = TSInteraction.grdbFetchOne(
+            sql: atOrBeforeQuery,
+            arguments: arguments,
+            transaction: transaction
+        ) {
+            return interactionAtOrBeforeSortId
+        }
+
+        // If there wasn't an interaction at or before this sortId,
+        // look for the first interaction *after* this sort id.
+
+        let afterQuery = """
+        SELECT *
+        FROM \(InteractionRecord.databaseTableName)
+        WHERE \(interactionColumn: .threadUniqueId) = ?
+        AND \(interactionColumn: .id) > ?
+        ORDER BY \(interactionColumn: .id) ASC
+        LIMIT 1
+        """
+
+        return TSInteraction.grdbFetchOne(
+            sql: afterQuery,
+            arguments: arguments,
+            transaction: transaction
+        )
     }
 
     func existsOutgoingMessage(transaction: GRDBReadTransaction) -> Bool {
@@ -1168,69 +1474,4 @@ public class GRDBInteractionFinder: NSObject, InteractionFinderAdapter {
     public static func maxRowId(transaction: GRDBReadTransaction) -> Int {
         try! Int.fetchOne(transaction.database, sql: "SELECT MAX(id) FROM model_TSInteraction") ?? 0
     }
-
-    // MARK: - Unseen & Unread
-
-    private let sqlClauseForAllUnreadInteractions: String = {
-        // The nomenclature we've inherited from our YDB database views is confusing.
-        //
-        // * "Unseen" refers to "all unread interactions".
-        // * "Unread" refers to "unread interactions which affect unread counts".
-        //
-        // This clause is used for the former case.
-        //
-        // We can either whitelist or blacklist interactions.
-        // It's a lot easier to whitelist.
-        //
-        // POST GRDB TODO: Rename "unseen" and "unread" finder methods.
-        let recordTypes: [SDSRecordType] = [
-            .disappearingConfigurationUpdateInfoMessage,
-            .unknownProtocolVersionMessage,
-            .verificationStateChangeMessage,
-            .call,
-            .errorMessage,
-            .incomingMessage,
-            .infoMessage,
-            .invalidIdentityKeyErrorMessage,
-            .invalidIdentityKeyReceivingErrorMessage,
-            .invalidIdentityKeySendingErrorMessage
-        ]
-
-        let recordTypesSql = recordTypes.map { "\($0.rawValue)" }.joined(separator: ",")
-
-        return """
-        (
-            \(interactionColumn: .read) IS 0
-            AND \(interactionColumn: .recordType) IN (\(recordTypesSql))
-        )
-        """
-    }()
-
-    private static let sqlClauseForUnreadInteractionCounts: String = {
-        // The nomenclature we've inherited from our YDB database views is confusing.
-        //
-        // * "Unseen" refers to "all unread interactions".
-        // * "Unread" refers to "unread interactions which affect unread counts".
-        //
-        // This clause is used for the latter case.
-        //
-        // We can either whitelist or blacklist interactions.
-        // It's a lot easier to whitelist.
-        //
-        // POST GRDB TODO: Rename "unseen" and "unread" finder methods.
-        return """
-        \(interactionColumn: .read) IS 0
-        AND (
-            \(interactionColumn: .recordType) IN (\(SDSRecordType.incomingMessage.rawValue), \(SDSRecordType.call.rawValue))
-            OR (
-                \(interactionColumn: .recordType) IS \(SDSRecordType.infoMessage.rawValue)
-                AND \(interactionColumn: .messageType) IS \(TSInfoMessageType.userJoinedSignal.rawValue)
-            )
-        )
-        """
-    }()
-}
-
-private func assertionError(_ description: String) -> Error {
-    return OWSErrorMakeAssertionError(description)
 }

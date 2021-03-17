@@ -1,19 +1,14 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 import Foundation
+import MultipeerConnectivity
 
 @objc
 class ConversationSplitViewController: UISplitViewController, ConversationSplit {
 
-    // MARK: - Dependencies
-
-    var databaseStorage: SDSDatabaseStorage {
-        return .shared
-    }
-
-    // MARK: -
+    fileprivate var deviceTransferNavController: DeviceTransferNavigationController?
 
     private let conversationListVC = ConversationListViewController()
     private let detailPlaceholderVC = NoSelectedConversationViewController()
@@ -112,11 +107,8 @@ class ConversationSplitViewController: UISplitViewController, ConversationSplit 
     override func viewWillLayoutSubviews() {
         super.viewWillLayoutSubviews()
 
-        // TODO Xcode 11: Delete this once we're compiling only in Xcode 11
-        #if swift(>=5.1)
         // We don't want to hide anything on iOS 13, as the extra subview no longer exists
         if #available(iOS 13, *) { hasHiddenExtraSubivew = true }
-        #endif
 
         // HACK: UISplitViewController adds an extra subview behind the navigation
         // bar area that extends across both views. As far as I can tell, it's not
@@ -138,8 +130,8 @@ class ConversationSplitViewController: UISplitViewController, ConversationSplit 
             // and everything it pushed to the navigation stack from the nav controller. We don't want
             // to just pop to root as we might have opened this conversation from the archive.
             if let selectedConversationIndex = primaryNavController.viewControllers.firstIndex(of: selectedConversationViewController) {
-                let trimmedViewControllers = Array(primaryNavController.viewControllers[0..<selectedConversationIndex])
-                primaryNavController.setViewControllers(trimmedViewControllers, animated: animated)
+                let targetViewController = primaryNavController.viewControllers[max(0, selectedConversationIndex-1)]
+                primaryNavController.popToViewController(targetViewController, animated: animated)
             }
         } else {
             viewControllers[1] = detailPlaceholderVC
@@ -180,7 +172,9 @@ class ConversationSplitViewController: UISplitViewController, ConversationSplit 
         conversationListVC.lastViewedThread = thread
 
         let threadViewModel = databaseStorage.uiRead {
-            return ThreadViewModel(thread: thread, transaction: $0)
+            return ThreadViewModel(thread: thread,
+                                   forConversationList: false,
+                                   transaction: $0)
         }
         let vc = ConversationViewController(threadViewModel: threadViewModel, action: action, focusMessageId: focusMessageId)
 
@@ -228,7 +222,16 @@ class ConversationSplitViewController: UISplitViewController, ConversationSplit 
             viewControllersToDisplay.append(vc)
             primaryNavController.setViewControllers(viewControllersToDisplay, animated: true)
         } else {
-            viewControllers[1] = vc
+            // There is a race condition at app launch where `isCollapsed` cannot be
+            // relied upon. This leads to a crash where viewControllers is empty, so
+            // setting index 1 is not possible. We know what the primary view controller
+            // should always be, so we attempt to fill it in when that happens. The only
+            // ways this could really be happening is if, somehow, before `viewControllers`
+            // is set in init this method is getting called OR this `viewControllers` is
+            // returning stale information. The latter seems most plausible, but is near
+            // impossible to reproduce.
+            owsAssertDebug(viewControllers.first == primaryNavController)
+            viewControllers = [primaryNavController, vc]
         }
 
         // If the detail VC is a nav controller, we want to keep track of
@@ -517,7 +520,7 @@ extension ConversationSplitViewController: UISplitViewControllerDelegate {
             // Don't ever allow a conversation view controller to be transfered on the master
             // stack when expanding from collapsed mode. This should never happen.
             guard let vc = vc as? ConversationViewController else { return true }
-            owsFailDebug("Unexpected conversation in view hierarchy: \(vc.thread)")
+            owsFailDebug("Unexpected conversation in view hierarchy: \(vc.thread.uniqueId)")
             return false
         }
 
@@ -561,7 +564,7 @@ private class NoSelectedConversationViewController: OWSViewController {
         view = UIView()
 
         let logoContainer = UIView.container()
-        logoImageView.image = #imageLiteral(resourceName: "logoSignal").withRenderingMode(.alwaysTemplate)
+        logoImageView.image = #imageLiteral(resourceName: "signal-logo-128").withRenderingMode(.alwaysTemplate)
         logoImageView.contentMode = .scaleAspectFit
         logoContainer.addSubview(logoImageView)
         logoImageView.autoPinTopToSuperviewMargin()
@@ -569,7 +572,7 @@ private class NoSelectedConversationViewController: OWSViewController {
         logoImageView.autoHCenterInSuperview()
         logoImageView.autoSetDimension(.height, toSize: 72)
 
-        titleLabel.font = UIFont.ows_dynamicTypeBody.ows_semibold()
+        titleLabel.font = UIFont.ows_dynamicTypeBody.ows_semibold
         titleLabel.textAlignment = .center
         titleLabel.numberOfLines = 0
         titleLabel.lineBreakMode = .byWordWrapping
@@ -604,4 +607,31 @@ private class NoSelectedConversationViewController: OWSViewController {
         bodyLabel.textColor = Theme.secondaryTextAndIconColor
         logoImageView.tintColor = Theme.isDarkThemeEnabled ? .ows_gray05 : .ows_gray65
     }
+}
+
+extension ConversationSplitViewController: DeviceTransferServiceObserver {
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+
+        deviceTransferService.addObserver(self)
+        deviceTransferService.startListeningForNewDevices()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+
+        deviceTransferService.removeObserver(self)
+        deviceTransferService.stopListeningForNewDevices()
+    }
+
+    func deviceTransferServiceDiscoveredNewDevice(peerId: MCPeerID, discoveryInfo: [String: String]?) {
+        guard deviceTransferNavController?.presentingViewController == nil else { return }
+        let navController = DeviceTransferNavigationController()
+        deviceTransferNavController = navController
+        navController.present(fromViewController: self)
+    }
+
+    func deviceTransferServiceDidStartTransfer(progress: Progress) {}
+
+    func deviceTransferServiceDidEndTransfer(error: DeviceTransferService.Error?) {}
 }

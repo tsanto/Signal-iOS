@@ -133,9 +133,12 @@ public class OutgoingMessageFactory: NSObject, Factory {
 
     @objc
     public func build(transaction: SDSAnyWriteTransaction) -> TSOutgoingMessage {
+        // The builder() factory method requires us to specify every
+        // property so that this will break if we add any new properties.
         return TSOutgoingMessageBuilder.builder(thread: threadCreator(transaction),
                                                 timestamp: timestampBuilder(),
                                                 messageBody: messageBodyBuilder(),
+                                                bodyRanges: bodyRangesBuilder(),
                                                 attachmentIds: attachmentIdsBuilder(),
                                                 expiresInSeconds: expiresInSecondsBuilder(),
                                                 expireStartedAt: expireStartedAtBuilder(),
@@ -178,7 +181,12 @@ public class OutgoingMessageFactory: NSObject, Factory {
     }
 
     @objc
-    var attachmentIdsBuilder: () -> NSMutableArray = {
+    public var bodyRangesBuilder: () -> MessageBodyRanges = {
+        return MessageBodyRanges.empty
+    }
+
+    @objc
+    public var attachmentIdsBuilder: () -> [String] = {
         return []
     }
 
@@ -271,23 +279,26 @@ public class IncomingMessageFactory: NSObject, Factory {
 
         let thread = threadCreator(transaction)
 
-        let item = TSIncomingMessage(incomingMessageWithTimestamp: timestampBuilder(),
-                                     in: thread,
-                                     authorAddress: authorAddressBuilder(thread),
-                                     sourceDeviceId: sourceDeviceIdBuilder(),
-                                     messageBody: messageBodyBuilder(),
-                                     attachmentIds: attachmentIdsBuilder(),
-                                     expiresInSeconds: expiresInSecondsBuilder(),
-                                     quotedMessage: quotedMessageBuilder(),
-                                     contactShare: contactShareBuilder(),
-                                     linkPreview: linkPreviewBuilder(),
-                                     messageSticker: messageStickerBuilder(),
-                                     serverTimestamp: serverTimestampBuilder(),
-                                     wasReceivedByUD: wasReceivedByUDBuilder(),
-                                     isViewOnceMessage: isViewOnceMessageBuilder())
-
+        // The builder() factory method requires us to specify every
+        // property so that this will break if we add any new properties.
+        let builder = TSIncomingMessageBuilder.builder(thread: thread,
+                                                       timestamp: timestampBuilder(),
+                                                       authorAddress: authorAddressBuilder(thread),
+                                                       sourceDeviceId: sourceDeviceIdBuilder(),
+                                                       messageBody: messageBodyBuilder(),
+                                                       bodyRanges: bodyRangesBuilder(),
+                                                       attachmentIds: attachmentIdsBuilder(),
+                                                       expiresInSeconds: expiresInSecondsBuilder(),
+                                                       quotedMessage: quotedMessageBuilder(),
+                                                       contactShare: contactShareBuilder(),
+                                                       linkPreview: linkPreviewBuilder(),
+                                                       messageSticker: messageStickerBuilder(),
+                                                       serverTimestamp: serverTimestampBuilder(),
+                                                       serverDeliveryTimestamp: serverDeliveryTimestampBuilder(),
+                                                       wasReceivedByUD: wasReceivedByUDBuilder(),
+                                                       isViewOnceMessage: isViewOnceMessageBuilder())
+        let item = builder.build()
         item.anyInsert(transaction: transaction)
-
         return item
     }
 
@@ -308,6 +319,11 @@ public class IncomingMessageFactory: NSObject, Factory {
     @objc
     public var messageBodyBuilder: () -> String = {
         return CommonGenerator.paragraph
+    }
+
+    @objc
+    public var bodyRangesBuilder: () -> MessageBodyRanges = {
+        return MessageBodyRanges.empty
     }
 
     @objc
@@ -365,6 +381,11 @@ public class IncomingMessageFactory: NSObject, Factory {
     }
 
     @objc
+    public var serverDeliveryTimestampBuilder: () -> UInt64 = {
+        return 0
+    }
+
+    @objc
     public var wasReceivedByUDBuilder: () -> Bool = {
         return false
     }
@@ -386,7 +407,6 @@ public class GroupThreadFactory: NSObject, Factory {
         let thread = try! GroupManager.createGroupForTests(members: memberAddressesBuilder(),
                                                            name: titleBuilder(),
                                                            avatarData: groupAvatarDataBuilder(),
-                                                           groupId: groupIdBuilder(),
                                                            groupsVersion: groupsVersionBuilder(),
                                                            transaction: transaction)
 
@@ -415,14 +435,9 @@ public class GroupThreadFactory: NSObject, Factory {
     }
 
     @objc
-    public var groupIdBuilder: () -> Data = {
-        // GroupsV2 TODO: Handle groups v2.
-        return Randomness.generateRandomBytes(Int32(kGroupIdLengthV1))
-    }
-
-    @objc
     public var groupsVersionBuilder: () -> GroupsVersion = {
-        return GroupManager.defaultGroupsVersion
+        // TODO: Make this .V2.
+        return .V1
     }
 
     @objc
@@ -463,10 +478,13 @@ public class ConversationFactory: NSObject {
             let messagePreparer = OutgoingMessagePreparer(message, unsavedAttachmentInfos: attachmentInfos)
             _ = try! messagePreparer.prepareMessage(transaction: asyncTransaction)
 
-            for attachment in message.allAttachments(with: asyncTransaction) as! [TSAttachmentStream] {
+            for attachment in message.allAttachments(with: asyncTransaction.unwrapGrdbRead) as! [TSAttachmentStream] {
                 attachment.updateAsUploaded(withEncryptionKey: Randomness.generateRandomBytes(16),
                                             digest: Randomness.generateRandomBytes(16),
                                             serverId: 1,
+                                            cdnKey: "",
+                                            cdnNumber: 0,
+                                            uploadTimestamp: 1,
                                             transaction: asyncTransaction)
             }
 
@@ -488,7 +506,8 @@ public class ConversationFactory: NSObject {
                                       contentType: "image/png",
                                       sourceFilename: nil,
                                       caption: caption,
-                                      albumMessageId: outgoingMessage.uniqueId)
+                                      albumMessageId: outgoingMessage.uniqueId,
+                                      isBorderless: false)
     }
 
 }
@@ -509,7 +528,7 @@ public class AttachmentStreamFactory: NSObject, Factory {
     class public func create(contentType: String, dataSource: DataSource, transaction: SDSAnyWriteTransaction) -> TSAttachmentStream {
         let factory = AttachmentStreamFactory()
         factory.contentTypeBuilder = { return contentType }
-        factory.byteCountBuilder = { return UInt32(dataSource.dataLength()) }
+        factory.byteCountBuilder = { return UInt32(dataSource.dataLength) }
         factory.sourceFilenameBuilder = { return dataSource.sourceFilename ?? "fake-filename.dat" }
 
         let attachmentStream = factory.build(transaction: transaction)
@@ -594,6 +613,7 @@ public class ContactFactory {
                        cnContactId: cnContactIdBuilder(),
                        firstName: firstNameBuilder(),
                        lastName: lastNameBuilder(),
+                       nickname: nicknameBuilder(),
                        fullName: fullNameBuilder(),
                        userTextPhoneNumbers: userTextPhoneNumbers,
                        phoneNumberNameMap: phoneNumberNameMap,
@@ -618,6 +638,10 @@ public class ContactFactory {
 
     public var lastNameBuilder: () -> String? = {
         return CommonGenerator.lastName()
+    }
+
+    public var nicknameBuilder: () -> String? = {
+        return CommonGenerator.nickname()
     }
 
     public var fullNameBuilder: () -> String = {
@@ -660,54 +684,78 @@ public class CommonGenerator: NSObject {
     }
 
     @objc
-    static public func address(hasPhoneNumber: Bool = true) -> SignalServiceAddress {
-        return SignalServiceAddress(uuid: UUID(), phoneNumber: hasPhoneNumber ? e164() : nil)
+    static public func address(hasUUID: Bool = true, hasPhoneNumber: Bool = true) -> SignalServiceAddress {
+        return SignalServiceAddress(uuid: hasUUID ? UUID() : nil, phoneNumber: hasPhoneNumber ? e164() : nil)
     }
 
     @objc
     static public let firstNames = [
+        "Alan",
+        "Alex",
         "Alice",
+        "Amy",
         "Arthur",
+        "Aruna",
         "Bertha",
         "Bob",
+        "Brian",
+        "Carlos",
         "Carol",
         "Carole",
-        "Carlos",
         "Charlie",
         "Chuck",
+        "Cody",
         "Craig",
+        "Curt",
         "Dan",
         "Dave",
         "David",
+        "Ehren",
         "Erin",
         "Eve",
         "Faythe",
         "Frank",
+        "Gerardo",
         "Grace",
+        "Gregg",
+        "Greyson",
         "Heidi",
+        "Jack",
+        "Jeff",
+        "Jim",
+        "Jon",
+        "Josh",
+        "Jun",
+        "Ken",
         "Lilia",
-        "Mallory",
         "Mallet",
+        "Mallory",
         "Matthew",
+        "Merlin",
         "Michael",
+        "Michelle",
         "Moxie",
+        "Myles",
+        "Nancy",
+        "Nolan",
         "Nora",
         "Oscar",
-        "Peggy",
         "Pat",
         "Paul",
+        "Peggy",
+        "Peter",
+        "Randall",
         "Riya",
         "Scott",
         "Sybil",
-        "Trent",
         "Ted",
+        "Trent",
         "Trevor",
         "Trudy",
-        "Victor",
         "Vanna",
+        "Victor",
         "Walter",
-        "Wendy",
-        "Merlin"
+        "Wendy"
     ]
 
     @objc
@@ -1713,6 +1761,17 @@ public class CommonGenerator: NSObject {
         "Zamora",
         "Zimmerman"
     ]
+
+    @objc
+    static public let nicknames = [
+        "AAAA",
+        "BBBB"
+    ]
+
+    @objc
+    static public func nickname() -> String {
+        return nicknames.randomElement()!
+    }
 
     @objc
     static public func firstName() -> String {

@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2019 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 import Foundation
@@ -9,13 +9,15 @@ public enum OWSMediaError: Error {
     case failure(description: String)
 }
 
-@objc public class OWSMediaUtils: NSObject {
+@objc
+public class OWSMediaUtils: NSObject {
 
     @available(*, unavailable, message:"do not instantiate this class.")
     private override init() {
     }
 
-    @objc public class func thumbnail(forImageAtPath path: String, maxDimension: CGFloat) throws -> UIImage {
+    @objc
+    public class func thumbnail(forImageAtPath path: String, maxDimension: CGFloat) throws -> UIImage {
         Logger.verbose("thumbnailing image: \(path)")
 
         guard FileManager.default.fileExists(atPath: path) else {
@@ -33,7 +35,24 @@ public enum OWSMediaError: Error {
         return thumbnailImage
     }
 
-    @objc public class func thumbnail(forWebpAtPath path: String, maxDimension: CGFloat) throws -> UIImage {
+    @objc
+    public class func thumbnail(forImageData imageData: Data, maxDimension: CGFloat) throws -> UIImage {
+        Logger.verbose("thumbnailing image data.")
+
+        guard (imageData as NSData).ows_isValidImage() else {
+            throw OWSMediaError.failure(description: "Invalid image.")
+        }
+        guard let originalImage = UIImage(data: imageData) else {
+            throw OWSMediaError.failure(description: "Could not load original image.")
+        }
+        guard let thumbnailImage = originalImage.resized(withMaxDimensionPoints: maxDimension) else {
+            throw OWSMediaError.failure(description: "Could not thumbnail image.")
+        }
+        return thumbnailImage
+    }
+
+    @objc
+    public class func thumbnail(forWebpAtPath path: String, maxDimension: CGFloat) throws -> UIImage {
         Logger.verbose("thumbnailing image: \(path)")
 
         guard FileManager.default.fileExists(atPath: path) else {
@@ -52,7 +71,8 @@ public enum OWSMediaError: Error {
         return thumbnailImage
     }
 
-    @objc public class func thumbnail(forVideoAtPath path: String, maxDimension: CGFloat) throws -> UIImage {
+    @objc
+    public class func thumbnail(forVideoAtPath path: String, maxDimension: CGFloat) throws -> UIImage {
         Logger.verbose("thumbnailing video: \(path)")
 
         guard isVideoOfValidContentTypeAndSize(path: path) else {
@@ -75,7 +95,8 @@ public enum OWSMediaError: Error {
         return image
     }
 
-    @objc public class func isValidVideo(path: String) -> Bool {
+    @objc
+    public class func isValidVideo(path: String) -> Bool {
         guard isVideoOfValidContentTypeAndSize(path: path) else {
             Logger.error("Media file has missing or invalid length.")
             return false
@@ -148,12 +169,16 @@ public enum OWSMediaError: Error {
     public static let kMaxFileSizeAnimatedImage = UInt(25 * 1024 * 1024)
     @objc
     public static let kMaxFileSizeImage = UInt(8 * 1024 * 1024)
+    // Cloudflare limits uploads to 100 MB. To avoid hitting those limits,
+    // we use limits that are 5% lower for the unencrypted content.
     @objc
-    public static let kMaxFileSizeVideo = UInt(100 * 1024 * 1024)
+    public static let kMaxFileSizeVideo = UInt(95 * 1000 * 1000)
     @objc
-    public static let kMaxFileSizeAudio = UInt(100 * 1024 * 1024)
+    public static let kMaxFileSizeAudio = UInt(95 * 1000 * 1000)
     @objc
-    public static let kMaxFileSizeGeneric = UInt(100 * 1024 * 1024)
+    public static let kMaxFileSizeGeneric = UInt(95 * 1000 * 1000)
+    @objc
+    public static let kMaxAttachmentUploadSizeBytes = UInt(100 * 1000 * 1000)
 
     @objc
     public static let kMaxVideoDimensions: CGFloat = 3 * 1024

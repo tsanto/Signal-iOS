@@ -28,8 +28,35 @@ public struct OrderedSet<Element> where Element: Hashable {
         return (wasInserted, elementAfterInsert)
     }
 
+    public mutating func remove(_ element: Element) {
+        set.remove(element)
+        orderedMembers = orderedMembers.filter { $0 != element }
+    }
+
+    public mutating func remove(_ elements: [Element]) {
+        for element in elements {
+            remove(element)
+        }
+    }
+
+    public func contains(_ element: Element) -> Bool {
+        return set.contains(element)
+    }
+
+    public var isEmpty: Bool {
+        return set.isEmpty
+    }
+
+    public var count: Int {
+        return set.count
+    }
+
+    public var first: Element? {
+        return orderedMembers.first
+    }
+
     // TODO: I only implemented the minimum API that I needed. There's lots more that could
-    // reasonably be added to an OrderedSet (remove, union, etc.)
+    // reasonably be added to an OrderedSet (union, etc.)
 }
 
 extension OrderedSet: ExpressibleByArrayLiteral {

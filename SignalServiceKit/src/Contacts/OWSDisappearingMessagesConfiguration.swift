@@ -7,23 +7,18 @@ import Foundation
 @objc
 public class DisappearingMessageToken: MTLModel {
     @objc
-    public var isEnabled: Bool = false
+    public var isEnabled: Bool {
+        return durationSeconds > 0
+    }
+
     @objc
     public var durationSeconds: UInt32 = 0
 
     @objc
     public init(isEnabled: Bool, durationSeconds: UInt32) {
         // Consider disabled if duration is zero.
-        self.isEnabled = isEnabled && durationSeconds > 0
         // Use zero duration if not enabled.
         self.durationSeconds = isEnabled ? durationSeconds : 0
-
-        if isEnabled != self.isEnabled {
-            owsFailDebug("isEnabled: \(isEnabled) != self.isEnabled: \(self.isEnabled)")
-        }
-        if durationSeconds != self.durationSeconds {
-            owsFailDebug("durationSeconds: \(durationSeconds) != self.durationSeconds: \(self.durationSeconds)")
-        }
 
         super.init()
     }
@@ -60,6 +55,12 @@ public class DisappearingMessageToken: MTLModel {
             return .disabledToken
         }
     }
+
+    @objc
+    public var durationString: String {
+        // This might be zero if DMs are not enabled.
+        NSString.formatDurationLossless(durationSeconds: durationSeconds)
+    }
 }
 
 // MARK: -
@@ -67,5 +68,25 @@ public class DisappearingMessageToken: MTLModel {
 public extension OWSDisappearingMessagesConfiguration {
     var asToken: DisappearingMessageToken {
         return DisappearingMessageToken(isEnabled: isEnabled, durationSeconds: durationSeconds)
+    }
+
+    static func applyToken(_ token: DisappearingMessageToken,
+                           toThread thread: TSThread,
+                           transaction: SDSAnyWriteTransaction) -> OWSDisappearingMessagesConfiguration {
+        let oldConfiguration = OWSDisappearingMessagesConfiguration.fetchOrBuildDefault(with: thread,
+                                                                                        transaction: transaction)
+        return oldConfiguration.applyToken(token, transaction: transaction)
+    }
+
+    func applyToken(_ token: DisappearingMessageToken,
+                    transaction: SDSAnyWriteTransaction) -> OWSDisappearingMessagesConfiguration {
+        let newConfiguration: OWSDisappearingMessagesConfiguration
+        if token.isEnabled {
+            newConfiguration = self.copyAsEnabled(withDurationSeconds: token.durationSeconds)
+        } else {
+            newConfiguration = self.copy(withIsEnabled: false)
+        }
+        newConfiguration.anyUpsert(transaction: transaction)
+        return newConfiguration
     }
 }

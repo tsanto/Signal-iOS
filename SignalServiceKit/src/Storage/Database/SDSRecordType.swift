@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 import Foundation
@@ -35,6 +35,7 @@ public enum SDSRecordType: UInt {
     case device = 33
     case disappearingConfigurationUpdateInfoMessage = 28
     case disappearingMessagesConfiguration = 39
+    case groupCallMessage = 65
     case incomingContactSyncJobRecord = 61
     case incomingGroupSyncJobRecord = 60
     case linkedDeviceReadReceipt = 36
@@ -68,6 +69,7 @@ public enum SDSRecordType: UInt {
     case invalidIdentityKeyErrorMessage = 17
     case invalidIdentityKeyReceivingErrorMessage = 1
     case invalidIdentityKeySendingErrorMessage = 23
+    case mention = 64
     case message = 11
     case outgoingMessage = 21
     case recipientReadReceipt = 12

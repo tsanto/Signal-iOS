@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2019 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import <SignalMessaging/BlockListUIUtils.h>
@@ -7,12 +7,15 @@
 NS_ASSUME_NONNULL_BEGIN
 
 @class ConversationStyle;
+@class MessageBody;
 @class OWSLinkPreviewDraft;
 @class OWSQuotedReplyModel;
 @class PHAsset;
 @class PhotoCapture;
 @class SignalAttachment;
 @class StickerInfo;
+
+@protocol MentionTextViewDelegate;
 
 @protocol ConversationInputToolbarDelegate <NSObject>
 
@@ -40,8 +43,6 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (void)cameraButtonPressed;
 
-- (void)cameraButtonPressedWithPhotoCapture:(nullable PhotoCapture *)photoCapture;
-
 - (void)galleryButtonPressed;
 
 - (void)gifButtonPressed;
@@ -68,20 +69,22 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface ConversationInputToolbar : UIView
 
-- (instancetype)initWithConversationStyle:(ConversationStyle *)conversationStyle NS_DESIGNATED_INITIALIZER;
-- (instancetype)initWithCoder:(NSCoder *)aDecoder NS_UNAVAILABLE;
-- (instancetype)initWithFrame:(CGRect)frame NS_UNAVAILABLE;
+@property (nonatomic) BOOL isMeasuringKeyboardHeight;
 
-@property (nonatomic, weak) id<ConversationInputToolbarDelegate> inputToolbarDelegate;
+- (instancetype)initWithConversationStyle:(ConversationStyle *)conversationStyle
+                             messageDraft:(nullable MessageBody *)messageDraft
+                     inputToolbarDelegate:(id<ConversationInputToolbarDelegate>)inputToolbarDelegate
+                    inputTextViewDelegate:(id<ConversationInputTextViewDelegate>)inputTextViewDelegate
+                          mentionDelegate:(id<MentionTextViewDelegate>)mentionDelegate NS_DESIGNATED_INITIALIZER;
+- (nullable instancetype)initWithCoder:(NSCoder *)coder NS_UNAVAILABLE;
+- (instancetype)initWithFrame:(CGRect)frame NS_UNAVAILABLE;
 
 - (void)beginEditingMessage;
 - (void)endEditingMessage;
 - (BOOL)isInputViewFirstResponder;
 
-- (void)setInputTextViewDelegate:(id<ConversationInputTextViewDelegate>)value;
-
-- (NSString *)messageText;
-- (void)setMessageText:(NSString *_Nullable)value animated:(BOOL)isAnimated;
+- (nullable MessageBody *)messageBody;
+- (void)setMessageBody:(nullable MessageBody *)value animated:(BOOL)isAnimated;
 - (void)acceptAutocorrectSuggestion;
 - (void)clearTextMessageAnimated:(BOOL)isAnimated;
 - (void)clearDesiredKeyboard;
@@ -115,6 +118,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, nullable) OWSQuotedReplyModel *quotedReply;
 
 @property (nonatomic, nullable, readonly) OWSLinkPreviewDraft *linkPreviewDraft;
+
+- (void)updateConversationStyle:(ConversationStyle *)conversationStyle NS_SWIFT_NAME(update(conversationStyle:));
 
 @end
 

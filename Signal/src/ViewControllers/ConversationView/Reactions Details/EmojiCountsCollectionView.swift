@@ -124,7 +124,7 @@ class EmojiCountCell: UICollectionViewCell {
 
         emoji.font = .systemFont(ofSize: 22)
 
-        count.font = UIFont.ows_dynamicTypeSubheadlineClamped.ows_monospaced().ows_semibold()
+        count.font = UIFont.ows_dynamicTypeSubheadlineClamped.ows_monospaced.ows_semibold
         count.textColor = Theme.primaryTextColor
     }
 
@@ -150,6 +150,6 @@ class EmojiCountCell: UICollectionViewCell {
     override func layoutSubviews() {
         super.layoutSubviews()
 
-        selectedBackgroundView?.layer.cornerRadius = height() / 2
+        selectedBackgroundView?.layer.cornerRadius = height / 2
     }
 }

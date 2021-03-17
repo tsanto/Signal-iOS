@@ -6,11 +6,14 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+@class MessageBodyRanges;
+
 // This header exposes private properties for SDS serialization.
 
 @interface TSThread (SDS)
 
 @property (nonatomic, copy, nullable, readonly) NSString *messageDraft;
+@property (nonatomic, readonly, nullable) MessageBodyRanges *messageDraftBodyRanges;
 
 @end
 
@@ -46,7 +49,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) TSOutgoingMessageState legacyMessageState;
 @property (nonatomic, readonly) BOOL legacyWasDelivered;
 @property (nonatomic, readonly) BOOL hasLegacyMessageState;
-@property (atomic, readonly)
+@property (atomic, nullable, readonly)
     NSDictionary<SignalServiceAddress *, TSOutgoingMessageRecipientState *> *recipientAddressStates;
 @property (nonatomic, readonly) TSOutgoingMessageState storedMessageState;
 
@@ -100,6 +103,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property (atomic, nullable, readonly) NSNumber *isValidImageCached;
 @property (atomic, nullable, readonly) NSNumber *isValidVideoCached;
+@property (atomic, nullable, readonly) NSNumber *isAnimatedCached;
 
 @end
 
@@ -154,19 +158,22 @@ NS_ASSUME_NONNULL_BEGIN
 
 #pragma mark -
 
-@interface OWSLinkedDeviceReadReceipt (SDS)
+@interface OWSReaction (SDS)
 
-@property (nonatomic, nullable, readonly) NSString *senderPhoneNumber;
-@property (nonatomic, nullable, readonly) NSString *senderUUID;
+@property (nonatomic, readonly, nullable) NSString *reactorE164;
+@property (nonatomic, readonly, nullable) NSString *reactorUUID;
 
 @end
 
 #pragma mark -
 
-@interface OWSReaction (SDS)
+@interface OWSGroupCallMessage (SDS)
 
-@property (nonatomic, readonly, nullable) NSString *reactorE164;
-@property (nonatomic, readonly, nullable) NSString *reactorUUID;
+@property (nonatomic, getter=wasRead) BOOL read;
+@property (nonatomic, readonly, nullable) NSString *eraId;
+@property (nonatomic, nullable) NSArray<NSString *> *joinedMemberUuids;
+@property (nonatomic, nullable) NSString *creatorUuid;
+@property (nonatomic, readonly) BOOL hasEnded;
 
 @end
 

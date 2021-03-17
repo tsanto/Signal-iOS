@@ -6,25 +6,35 @@ import Foundation
 
 extension OutgoingMessagePreparer {
     @objc
-    public convenience init(fullMessageText: String,
+    public convenience init(messageBody: MessageBody?,
                             mediaAttachments: [SignalAttachment],
                             thread: TSThread,
                             quotedReplyModel: OWSQuotedReplyModel?,
                             transaction: SDSAnyReadTransaction) {
+
         var attachments = mediaAttachments
         let truncatedText: String?
-        if fullMessageText.lengthOfBytes(using: .utf8) <= kOversizeTextMessageSizeThreshold {
-            truncatedText = fullMessageText
-        } else {
-            truncatedText = fullMessageText.truncated(toByteCount: kOversizeTextMessageSizeThreshold)
+        let bodyRanges: MessageBodyRanges?
 
-            if let dataSource = DataSourceValue.dataSource(withOversizeText: fullMessageText) {
-                let attachment = SignalAttachment.attachment(dataSource: dataSource,
-                                                             dataUTI: kOversizeTextAttachmentUTI)
-                attachments.append(attachment)
+        if let messageBody = messageBody, !messageBody.text.isEmpty {
+            if messageBody.text.lengthOfBytes(using: .utf8) >= kOversizeTextMessageSizeThreshold {
+                truncatedText = messageBody.text.truncated(toByteCount: kOversizeTextMessageSizeThreshold)
+                bodyRanges = messageBody.ranges
+
+                if let dataSource = DataSourceValue.dataSource(withOversizeText: messageBody.text) {
+                    let attachment = SignalAttachment.attachment(dataSource: dataSource,
+                                                                 dataUTI: kOversizeTextAttachmentUTI)
+                    attachments.append(attachment)
+                } else {
+                    owsFailDebug("dataSource was unexpectedly nil")
+                }
             } else {
-                owsFailDebug("dataSource was unexpectedly nil")
+                truncatedText = messageBody.text
+                bodyRanges = messageBody.ranges
             }
+        } else {
+            truncatedText = nil
+            bodyRanges = nil
         }
 
         let expiresInSeconds: UInt32
@@ -52,13 +62,24 @@ extension OutgoingMessagePreparer {
                 isViewOnceMessage = true
                 break
             }
+
+            if attachment.isBorderless {
+                assert(mediaAttachments.count == 1)
+                break
+            }
         }
+
+        // Discard quoted reply for view-once messages.
+        let quotedMessage: TSQuotedMessage? = (isViewOnceMessage
+            ? nil
+            : quotedReplyModel?.buildQuotedMessageForSending())
 
         let message = TSOutgoingMessageBuilder(thread: thread,
                                                 messageBody: truncatedText,
+                                                bodyRanges: bodyRanges,
                                                 expiresInSeconds: expiresInSeconds,
                                                 isVoiceMessage: isVoiceMessage,
-                                                quotedMessage: quotedReplyModel?.buildQuotedMessageForSending(),
+                                                quotedMessage: quotedMessage,
                                                 isViewOnceMessage: isViewOnceMessage).build()
 
         let attachmentInfos = attachments.map { $0.buildOutgoingAttachmentInfo(message: message) }

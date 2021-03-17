@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 import UIKit
@@ -15,30 +15,25 @@ public class OnboardingBaseViewController: OWSViewController {
     public init(onboardingController: OnboardingController) {
         self.onboardingController = onboardingController
 
-        super.init(nibName: nil, bundle: nil)
+        super.init()
 
         self.shouldUseTheme = false
     }
 
-    @available(*, unavailable, message: "use other init() instead.")
-    required public init?(coder aDecoder: NSCoder) {
-        notImplemented()
-    }
-
     // MARK: - Factory Methods
 
-    func titleLabel(text: String) -> UILabel {
+    func createTitleLabel(text: String) -> UILabel {
         let titleLabel = UILabel()
         titleLabel.text = text
         titleLabel.textColor = Theme.primaryTextColor
-        titleLabel.font = UIFont.ows_dynamicTypeTitle1Clamped.ows_semibold()
+        titleLabel.font = UIFont.ows_dynamicTypeTitle1Clamped.ows_semibold
         titleLabel.numberOfLines = 0
         titleLabel.lineBreakMode = .byWordWrapping
         titleLabel.textAlignment = .center
         return titleLabel
     }
 
-    func explanationLabel(explanationText: String) -> UILabel {
+    func createExplanationLabel(explanationText: String) -> UILabel {
         let explanationLabel = UILabel()
         explanationLabel.textColor = Theme.secondaryTextAndIconColor
         explanationLabel.font = UIFont.ows_dynamicTypeSubheadlineClamped
@@ -61,28 +56,34 @@ public class OnboardingBaseViewController: OWSViewController {
     }
 
     func primaryButton(title: String, selector: Selector) -> OWSFlatButton {
-        return button(title: title, selector: selector, titleColor: .white, backgroundColor: .ows_signalBlue)
+        let button = OWSFlatButton.button(
+            title: title,
+            font: UIFont.ows_dynamicTypeBodyClamped.ows_semibold,
+            titleColor: .white,
+            backgroundColor: .ows_accentBlue,
+            target: self,
+            selector: selector)
+        button.button.layer.cornerRadius = 14
+        button.contentEdgeInsets = UIEdgeInsets(hMargin: 4, vMargin: 14)
+        return button
     }
 
     func linkButton(title: String, selector: Selector) -> OWSFlatButton {
-        return button(title: title, selector: selector, titleColor: .ows_signalBlue, backgroundColor: .clear)
+        let button = OWSFlatButton.button(
+            title: title,
+            font: UIFont.ows_dynamicTypeSubheadlineClamped,
+            titleColor: Theme.accentBlueColor,
+            backgroundColor: .clear,
+            target: self,
+            selector: selector)
+        button.enableMultilineLabel()
+        button.button.layer.cornerRadius = 8
+        button.contentEdgeInsets = UIEdgeInsets(hMargin: 4, vMargin: 8)
+        return button
     }
 
     func shouldShowBackButton() -> Bool {
         return onboardingController.isOnboardingModeOverriden
-    }
-
-    private func button(title: String, selector: Selector, titleColor: UIColor, backgroundColor: UIColor) -> OWSFlatButton {
-        let font = UIFont.ows_dynamicTypeBodyClamped.ows_semibold()
-        let buttonHeight = OWSFlatButton.heightForFont(font)
-        let button = OWSFlatButton.button(title: title,
-                                          font: font,
-                                          titleColor: titleColor,
-                                          backgroundColor: backgroundColor,
-                                          target: self,
-                                          selector: selector)
-        button.autoSetDimension(.height, toSize: buttonHeight)
-        return button
     }
 
     public class func horizontallyWrap(primaryButton: UIView) -> UIView {
@@ -107,16 +108,16 @@ public class OnboardingBaseViewController: OWSViewController {
     public override func viewDidLoad() {
         super.viewDidLoad()
 
-        self.shouldBottomViewReserveSpaceForKeyboard = true
+        primaryView.layoutMargins = primaryLayoutMargins
 
-        if (shouldShowBackButton()) {
+        if shouldShowBackButton() {
             let backButton = UIButton()
             let backButtonImage = CurrentAppContext().isRTL ? #imageLiteral(resourceName: "NavBarBackRTL") : #imageLiteral(resourceName: "NavBarBack")
             backButton.setTemplateImage(backButtonImage, tintColor: Theme.secondaryTextAndIconColor)
             backButton.addTarget(self, action: #selector(navigateBack), for: .touchUpInside)
 
             view.addSubview(backButton)
-            backButton.autoSetDimensions(to: CGSize(width: 40, height: 40))
+            backButton.autoSetDimensions(to: CGSize(square: 40))
             backButton.autoPinEdge(toSuperviewMargin: .leading)
             backButton.autoPinEdge(toSuperviewMargin: .top)
         }
@@ -162,9 +163,5 @@ public class OnboardingBaseViewController: OWSViewController {
 
     public override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
         return UIDevice.current.isIPad ? .all : .portrait
-    }
-
-    public override var preferredStatusBarStyle: UIStatusBarStyle {
-        return .lightContent
     }
 }

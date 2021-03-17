@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 import Foundation
@@ -19,6 +19,7 @@ public class SSKPreferences: NSObject {
     // MARK: -
 
     private static let areLinkPreviewsEnabledKey = "areLinkPreviewsEnabled"
+    private static let areLegacyLinkPreviewsEnabledKey = "areLegacyLinkPreviewsEnabled"
 
     @objc
     public static func areLinkPreviewsEnabled(transaction: SDSAnyReadTransaction) -> Bool {
@@ -26,14 +27,38 @@ public class SSKPreferences: NSObject {
     }
 
     @objc
-    public static func setAreLinkPreviewsEnabledAndSendSyncMessage(_ newValue: Bool, transaction: SDSAnyWriteTransaction) {
-        setAreLinkPreviewsEnabled(newValue, transaction: transaction)
-        SSKEnvironment.shared.syncManager.sendConfigurationSyncMessage()
+    public static func setAreLinkPreviewsEnabled(_ newValue: Bool,
+                                                 sendSyncMessage shouldSync: Bool = false,
+                                                 transaction: SDSAnyWriteTransaction) {
+        store.setBool(newValue, key: areLinkPreviewsEnabledKey, transaction: transaction)
+
+        if shouldSync {
+            SSKEnvironment.shared.syncManager.sendConfigurationSyncMessage()
+            SSKEnvironment.shared.storageServiceManager.recordPendingLocalAccountUpdates()
+        }
+    }
+
+    // The following two methods are just to make sure we can store and forward in storage service updates
+    public static func areLegacyLinkPreviewsEnabled(transaction: SDSAnyReadTransaction) -> Bool {
+        return store.getBool(areLegacyLinkPreviewsEnabledKey, defaultValue: true, transaction: transaction)
+    }
+
+    public static func setAreLegacyLinkPreviewsEnabled(_ newValue: Bool, transaction: SDSAnyWriteTransaction) {
+        store.setBool(newValue, key: areLegacyLinkPreviewsEnabledKey, transaction: transaction)
+    }
+
+    // MARK: -
+
+    private static let areSharingSuggestionsEnabledKey = "areSharingSuggestionsEnabled"
+
+    @objc
+    public static func areSharingSuggestionsEnabled(transaction: SDSAnyReadTransaction) -> Bool {
+        return store.getBool(areSharingSuggestionsEnabledKey, defaultValue: true, transaction: transaction)
     }
 
     @objc
-    public static func setAreLinkPreviewsEnabled(_ newValue: Bool, transaction: SDSAnyWriteTransaction) {
-        store.setBool(newValue, key: areLinkPreviewsEnabledKey, transaction: transaction)
+    public static func setAreSharingSuggestionsEnabled(_ newValue: Bool, transaction: SDSAnyWriteTransaction) {
+        store.setBool(newValue, key: areSharingSuggestionsEnabledKey, transaction: transaction)
     }
 
     // MARK: -
@@ -130,6 +155,58 @@ public class SSKPreferences: NSObject {
 
         store.setInt(value, key: messageRequestInteractionIdEpochKey, transaction: transaction.asAnyWrite)
         messageRequestInteractionIdEpochCached = value
+    }
+
+    // MARK: - Badge Count
+
+    private static let includeMutedThreadsInBadgeCount = "includeMutedThreadsInBadgeCount"
+    private static var includeMutedThreadsInBadgeCountCached: Bool?
+
+    @objc
+    public static func includeMutedThreadsInBadgeCount(transaction: SDSAnyReadTransaction) -> Bool {
+        if let value = includeMutedThreadsInBadgeCountCached { return value }
+        let value = store.getBool(includeMutedThreadsInBadgeCount, defaultValue: false, transaction: transaction)
+        includeMutedThreadsInBadgeCountCached = value
+        return value
+    }
+
+    @objc
+    public static func setIncludeMutedThreadsInBadgeCount(_ value: Bool, transaction: SDSAnyWriteTransaction) {
+        store.setBool(value, key: includeMutedThreadsInBadgeCount, transaction: transaction)
+        includeMutedThreadsInBadgeCountCached = value
+    }
+
+    // MARK: - Profile avatar preference
+
+    @objc
+    public static let preferContactAvatarsPreferenceDidChange = Notification.Name("PreferContactAvatarsPreferenceDidChange")
+    private static let preferContactAvatarsKey = "preferContactAvatarsKey"
+    private static var preferContactAvatarsCached: Bool?
+
+    @objc
+    public static func preferContactAvatars(transaction: SDSAnyReadTransaction) -> Bool {
+        if let value = preferContactAvatarsCached { return value }
+        let value = store.getBool(preferContactAvatarsKey, defaultValue: false, transaction: transaction)
+        preferContactAvatarsCached = value
+        return value
+    }
+
+    @objc
+    public static func setPreferContactAvatars(
+        _ value: Bool,
+        updateStorageService: Bool = true,
+        transaction: SDSAnyWriteTransaction) {
+
+        let oldValue = store.getBool(preferContactAvatarsKey, transaction: transaction)
+        store.setBool(value, key: preferContactAvatarsKey, transaction: transaction)
+        preferContactAvatarsCached = value
+
+        if oldValue != value {
+            if updateStorageService {
+                SSKEnvironment.shared.storageServiceManager.recordPendingLocalAccountUpdates()
+            }
+            NotificationCenter.default.postNotificationNameAsync(Self.preferContactAvatarsPreferenceDidChange, object: nil)
+        }
     }
 
     // MARK: -

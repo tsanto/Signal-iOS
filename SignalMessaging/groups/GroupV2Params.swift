@@ -12,13 +12,6 @@ public struct GroupV2Params {
     let groupPublicParams: GroupPublicParams
     let groupPublicParamsData: Data
 
-    public init(groupModel: TSGroupModel) throws {
-        guard let groupSecretParamsData = groupModel.groupSecretParamsData else {
-            throw OWSAssertionError("Missing groupSecretParamsData.")
-        }
-        try self.init(groupSecretParamsData: groupSecretParamsData)
-    }
-
     public init(groupSecretParamsData: Data) throws {
         self.groupSecretParamsData = groupSecretParamsData
         let groupSecretParams = try GroupSecretParams(contents: [UInt8](groupSecretParamsData))
@@ -31,15 +24,24 @@ public struct GroupV2Params {
 
 // MARK: -
 
+public extension TSGroupModelV2 {
+    func groupV2Params() throws -> GroupV2Params {
+        return try GroupV2Params(groupSecretParamsData: secretParamsData)
+    }
+}
+
+// MARK: -
+
 public extension GroupV2Params {
-    func encryptString(_ value: String) throws -> Data {
+
+    fileprivate func encryptString(_ value: String) throws -> Data {
         guard let plaintext: Data = value.data(using: .utf8) else {
             throw OWSAssertionError("Could not encrypt value.")
         }
         return try encryptBlob(plaintext)
     }
 
-    func decryptString(_ data: Data) throws -> String {
+    fileprivate func decryptString(_ data: Data) throws -> String {
         let plaintext = try decryptBlob(data)
         guard let string = String(bytes: plaintext, encoding: .utf8) else {
             throw OWSAssertionError("Could not decrypt value.")
@@ -47,15 +49,40 @@ public extension GroupV2Params {
         return string
     }
 
-    func encryptBlob(_ plaintext: Data) throws -> Data {
+    fileprivate func encryptBlob(_ plaintext: Data) throws -> Data {
+        guard !DebugFlags.groupsV2corruptBlobEncryption.get() else {
+            return Randomness.generateRandomBytes(Int32(plaintext.count))
+        }
         let clientZkGroupCipher = ClientZkGroupCipher(groupSecretParams: groupSecretParams)
-        return try clientZkGroupCipher.encryptBlob(plaintext: [UInt8](plaintext)).asData
+        let ciphertext = try clientZkGroupCipher.encryptBlob(plaintext: [UInt8](plaintext)).asData
+        assert(ciphertext != plaintext)
+        assert(ciphertext.count > 0)
+
+        if plaintext.count <= Self.decryptedBlobCacheMaxItemSize {
+            let cacheKey = (groupSecretParamsData + ciphertext) as NSData
+            Self.decryptedBlobCache.setObject(plaintext as NSData, forKey: cacheKey)
+        }
+
+        return ciphertext
     }
 
-    func decryptBlob(_ data: Data) throws -> Data {
+    private static let decryptedBlobCache = NSCache<NSData, NSData>()
+    private static let decryptedBlobCacheMaxItemSize: UInt = 4 * 1024
+
+    fileprivate func decryptBlob(_ ciphertext: Data) throws -> Data {
+        let cacheKey = (groupSecretParamsData + ciphertext) as NSData
+        if let plaintext = Self.decryptedBlobCache.object(forKey: cacheKey) {
+            return plaintext as Data
+        }
+
         let clientZkGroupCipher = ClientZkGroupCipher(groupSecretParams: groupSecretParams)
-        let plaintext = try clientZkGroupCipher.decryptBlob(blobCiphertext: [UInt8](data))
-        return plaintext.asData
+        let plaintext = try clientZkGroupCipher.decryptBlob(blobCiphertext: [UInt8](ciphertext)).asData
+        assert(ciphertext != plaintext)
+
+        if plaintext.count <= Self.decryptedBlobCacheMaxItemSize {
+            Self.decryptedBlobCache.setObject(plaintext as NSData, forKey: cacheKey)
+        }
+        return plaintext
     }
 
     func uuid(forUserId userId: Data) throws -> UUID {
@@ -63,21 +90,139 @@ public extension GroupV2Params {
         return try uuid(forUuidCiphertext: uuidCiphertext)
     }
 
+    private static let decryptedUuidCache = NSCache<NSData, NSUUID>()
+
     func uuid(forUuidCiphertext uuidCiphertext: UuidCiphertext) throws -> UUID {
+        let cacheKey = (groupSecretParamsData + uuidCiphertext.serialize().asData) as NSData
+        if let plaintext = Self.decryptedUuidCache.object(forKey: cacheKey) {
+            return plaintext as UUID
+        }
+
         let clientZkGroupCipher = ClientZkGroupCipher(groupSecretParams: self.groupSecretParams)
         let zkgUuid = try clientZkGroupCipher.decryptUuid(uuidCiphertext: uuidCiphertext)
-        return zkgUuid.asUUID()
+        let uuid = zkgUuid.asUUID()
+
+        Self.decryptedUuidCache.setObject(uuid as NSUUID, forKey: cacheKey)
+        return uuid
     }
 
     func userId(forUuid uuid: UUID) throws -> Data {
         let clientZkGroupCipher = ClientZkGroupCipher(groupSecretParams: self.groupSecretParams)
         let uuidCiphertext = try clientZkGroupCipher.encryptUuid(uuid: try uuid.asZKGUuid())
-        return uuidCiphertext.serialize().asData
+        let userId = uuidCiphertext.serialize().asData
+
+        let cacheKey = (groupSecretParamsData + userId) as NSData
+        Self.decryptedUuidCache.setObject(uuid as NSUUID, forKey: cacheKey)
+
+        return userId
     }
 
-    func profileKey(forProfileKeyCiphertext profileKeyCiphertext: ProfileKeyCiphertext) throws -> Data {
+    private static let decryptedProfileKeyCache = NSCache<NSData, NSData>()
+
+    func profileKey(forProfileKeyCiphertext profileKeyCiphertext: ProfileKeyCiphertext,
+                    uuid: UUID) throws -> Data {
+        let zkgUuid = try uuid.asZKGUuid()
+
+        let cacheKey = (groupSecretParamsData + profileKeyCiphertext.serialize().asData + zkgUuid.serialize().asData) as NSData
+        if let plaintext = Self.decryptedProfileKeyCache.object(forKey: cacheKey) {
+            return plaintext as Data
+        }
+
         let clientZkGroupCipher = ClientZkGroupCipher(groupSecretParams: self.groupSecretParams)
-        let profileKey = try clientZkGroupCipher.decryptProfileKey(profileKeyCiphertext: profileKeyCiphertext)
-        return profileKey.serialize().asData
+        let profileKey = try clientZkGroupCipher.decryptProfileKey(profileKeyCiphertext: profileKeyCiphertext,
+                                                                   uuid: zkgUuid)
+        let plaintext = profileKey.serialize().asData
+
+        Self.decryptedProfileKeyCache.setObject(plaintext as NSData, forKey: cacheKey)
+        return plaintext
+    }
+}
+
+// MARK: -
+
+public extension GroupV2Params {
+    func decryptDisappearingMessagesTimer(_ ciphertext: Data?) -> DisappearingMessageToken {
+        guard let ciphertext = ciphertext else {
+            // Treat a missing value as disabled.
+            return DisappearingMessageToken.disabledToken
+        }
+        do {
+            let blobProtoData = try decryptBlob(ciphertext)
+            let blobProto = try GroupsProtoGroupAttributeBlob(serializedData: blobProtoData)
+            if let blobContent = blobProto.content {
+                switch blobContent {
+                case .disappearingMessagesDuration(let value):
+                    return DisappearingMessageToken.token(forProtoExpireTimer: value)
+                default:
+                    owsFailDebug("Invalid disappearing messages value.")
+                }
+            }
+        } catch {
+            owsFailDebug("Could not decrypt and parse disappearing messages state: \(error).")
+        }
+        return DisappearingMessageToken.disabledToken
+    }
+
+    func encryptDisappearingMessagesTimer(_ token: DisappearingMessageToken) throws -> Data {
+        let duration = (token.isEnabled
+            ? token.durationSeconds
+            : 0)
+        var blobBuilder = GroupsProtoGroupAttributeBlob.builder()
+        blobBuilder.setContent(GroupsProtoGroupAttributeBlobOneOfContent.disappearingMessagesDuration(duration))
+        let blobData = try blobBuilder.buildSerializedData()
+        let encryptedTimerData = try encryptBlob(blobData)
+        return encryptedTimerData
+    }
+
+    func decryptGroupName(_ ciphertext: Data?) -> String? {
+        guard let ciphertext = ciphertext else {
+            // Treat a missing value as no value.
+            return nil
+        }
+        do {
+            let blobProtoData = try decryptBlob(ciphertext)
+            let blobProto = try GroupsProtoGroupAttributeBlob(serializedData: blobProtoData)
+            if let blobContent = blobProto.content {
+                switch blobContent {
+                case .title(let value):
+                    return value
+                default:
+                    owsFailDebug("Invalid group name value.")
+                }
+            }
+        } catch {
+            owsFailDebug("Could not decrypt group name: \(error).")
+        }
+        return nil
+    }
+
+    func encryptGroupName(_ value: String) throws -> Data {
+        var blobBuilder = GroupsProtoGroupAttributeBlob.builder()
+        blobBuilder.setContent(GroupsProtoGroupAttributeBlobOneOfContent.title(value))
+        let blobData = try blobBuilder.buildSerializedData()
+        let encryptedTimerData = try encryptBlob(blobData)
+        return encryptedTimerData
+    }
+
+    func decryptGroupAvatar(_ ciphertext: Data) throws -> Data? {
+        let blobProtoData = try decryptBlob(ciphertext)
+        let blobProto = try GroupsProtoGroupAttributeBlob(serializedData: blobProtoData)
+        if let blobContent = blobProto.content {
+            switch blobContent {
+            case .avatar(let value):
+                return value
+            default:
+                owsFailDebug("Invalid group avatar value.")
+            }
+        }
+        return nil
+    }
+
+    func encryptGroupAvatar(_ value: Data) throws -> Data {
+        var blobBuilder = GroupsProtoGroupAttributeBlob.builder()
+        blobBuilder.setContent(GroupsProtoGroupAttributeBlobOneOfContent.avatar(value))
+        let blobData = try blobBuilder.buildSerializedData()
+        let encryptedTimerData = try encryptBlob(blobData)
+        return encryptedTimerData
     }
 }

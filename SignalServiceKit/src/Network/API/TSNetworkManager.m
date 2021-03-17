@@ -1,41 +1,81 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import "TSNetworkManager.h"
 #import "AppContext.h"
+#import "MIMETypeUtil.h"
 #import "NSError+OWSOperation.h"
-#import "NSURLSessionDataTask+StatusCode.h"
+#import "NSURLSessionDataTask+OWS_HTTP.h"
 #import "OWSError.h"
 #import "OWSQueues.h"
 #import "OWSSignalService.h"
 #import "SSKEnvironment.h"
 #import "TSAccountManager.h"
 #import "TSRequest.h"
-#import <AFNetworking/AFNetworking.h>
+#import <AFNetworking/AFHTTPSessionManager.h>
 #import <SignalCoreKit/NSData+OWS.h>
+#import <SignalCoreKit/NSDate+OWS.h>
 #import <SignalServiceKit/SignalServiceKit-Swift.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
 NSErrorDomain const TSNetworkManagerErrorDomain = @"SignalServiceKit.TSNetworkManager";
-
-// NOTE: This function should only be called from IsNetworkConnectivityFailure().
-BOOL IsObjCNetworkConnectivityFailure(NSError *_Nullable error)
-{
-    return ([error.domain isEqualToString:TSNetworkManagerErrorDomain]
-        && error.code == TSNetworkManagerErrorFailedConnection);
-}
+NSString *const TSNetworkManagerErrorRetryAfterKey = @"TSNetworkManagerError.RetryAfter";
 
 BOOL IsNetworkConnectivityFailure(NSError *_Nullable error)
 {
-    if (IsObjCNetworkConnectivityFailure(error)) {
+    if ([error.domain isEqualToString:NSURLErrorDomain]) {
+        switch (error.code) {
+            case kCFURLErrorTimedOut:
+            case kCFURLErrorCannotConnectToHost:
+            case kCFURLErrorNetworkConnectionLost:
+            case kCFURLErrorDNSLookupFailed:
+            case kCFURLErrorNotConnectedToInternet:
+            case kCFURLErrorSecureConnectionFailed:
+                // TODO: We might want to add kCFURLErrorCannotFindHost.
+                return YES;
+            default:
+                return NO;
+        }
+    }
+    BOOL isObjCNetworkConnectivityFailure = ([error.domain isEqualToString:TSNetworkManagerErrorDomain]
+        && error.code == TSNetworkManagerErrorFailedConnection);
+    BOOL isOWSWebSocketFailure = ([error.domain isEqualToString:OWSSignalServiceKitErrorDomain]
+        && error.code == OWSErrorCodeMessageRequestFailed);
+    BOOL isNetworkProtocolError = ([error.domain isEqualToString:NSPOSIXErrorDomain] && error.code == 100);
+
+    if (isObjCNetworkConnectivityFailure || isOWSWebSocketFailure || isNetworkProtocolError) {
         return YES;
     } else if ([TSNetworkManager isSwiftNetworkConnectivityError:error]) {
         return YES;
     } else {
         return NO;
     }
+}
+
+NSNumber *_Nullable HTTPStatusCodeForError(NSError *_Nullable error)
+{
+    NSNumber *_Nullable afHttpStatusCode = error.afHttpStatusCode;
+    if (afHttpStatusCode.integerValue > 0) {
+        return afHttpStatusCode;
+    }
+    NSNumber *_Nullable swiftStatusCode = [TSNetworkManager swiftHTTPStatusCodeForError:error];
+    if (swiftStatusCode.integerValue > 0) {
+        return swiftStatusCode;
+    }
+    return nil;
+}
+
+NSDate *_Nullable HTTPRetryAfterDateForError(NSError *_Nullable error)
+{
+    NSDate *retryAfterDate = nil;
+
+    // Different errors may represent a retry after in different ways
+    retryAfterDate = retryAfterDate ?: error.afRetryAfterDate;
+    retryAfterDate = retryAfterDate ?: [TSNetworkManager swiftHTTPRetryAfterDateForError:error];
+    retryAfterDate = retryAfterDate ?: error.userInfo[TSNetworkManagerErrorRetryAfterKey];
+    return retryAfterDate;
 }
 
 dispatch_queue_t NetworkManagerQueue()
@@ -54,6 +94,7 @@ dispatch_queue_t NetworkManagerQueue()
 
 @property (nonatomic, readonly) AFHTTPSessionManager *sessionManager;
 @property (nonatomic, readonly) NSDictionary *defaultHeaders;
+@property (nonatomic, readonly) NSDate *createdDate;
 
 @end
 
@@ -65,7 +106,7 @@ dispatch_queue_t NetworkManagerQueue()
 
 - (OWSSignalService *)signalService
 {
-    return [OWSSignalService sharedInstance];
+    return [OWSSignalService shared];
 }
 
 #pragma mark -
@@ -79,16 +120,17 @@ dispatch_queue_t NetworkManagerQueue()
         return self;
     }
 
-    _sessionManager = [self.signalService buildSignalServiceSessionManager];
+    // TODO: Use OWSUrlSession instead.
+    _sessionManager = [self.signalService sessionManagerForMainSignalService];
     self.sessionManager.completionQueue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
     // NOTE: We could enable HTTPShouldUsePipelining here.
     // Make a copy of the default headers for this session manager.
     _defaultHeaders = [self.sessionManager.requestSerializer.HTTPRequestHeaders copy];
+    _createdDate = [NSDate new];
 
     return self;
 }
 
-//  TSNetworkManager.serialQueue
 - (void)performRequest:(TSRequest *)request
             canUseAuth:(BOOL)canUseAuth
                success:(TSNetworkManagerSuccess)success
@@ -99,16 +141,30 @@ dispatch_queue_t NetworkManagerQueue()
     OWSAssertDebug(success);
     OWSAssertDebug(failure);
 
+    if (AppExpiry.shared.isExpired) {
+        NSURLSessionDataTask *task = [[NSURLSessionDataTask alloc] init];
+        NSError *error = OWSErrorMakeAssertionError(@"App is expired.");
+        failure(task, error);
+        return;
+    }
+
     // Clear all headers so that we don't retain headers from previous requests.
     for (NSString *headerField in self.sessionManager.requestSerializer.HTTPRequestHeaders.allKeys.copy) {
         [self.sessionManager.requestSerializer setValue:nil forHTTPHeaderField:headerField];
     }
 
+    OWSHttpHeaders *httpHeaders = [OWSHttpHeaders new];
+
     // Apply the default headers for this session manager.
-    for (NSString *headerField in self.defaultHeaders) {
-        NSString *headerValue = self.defaultHeaders[headerField];
-        [self.sessionManager.requestSerializer setValue:headerValue forHTTPHeaderField:headerField];
-    }
+    [httpHeaders addHeaders:self.defaultHeaders overwriteOnConflict:NO];
+
+    // Set User-Agent header.
+    [httpHeaders addHeader:OWSURLSession.kUserAgentHeader
+                      value:OWSURLSession.signalIosUserAgent
+        overwriteOnConflict:YES];
+
+    // Then apply any custom headers for the request
+    [httpHeaders addHeaders:request.allHTTPHeaderFields overwriteOnConflict:YES];
 
     if (canUseAuth && request.shouldHaveAuthorizationHeaders) {
         OWSAssertDebug(request.authUsername.length > 0);
@@ -130,12 +186,10 @@ dispatch_queue_t NetworkManagerQueue()
         // All fronted requests go through the same host
         NSURL *customBaseURL = [self.signalService.domainFrontBaseURL
             URLByAppendingPathComponent:request.customCensorshipCircumventionPrefix];
-        // Ensure terminal slash for baseURL path, so that NSURL +URLWithString:relativeToURL: works as expected
-        if (![customBaseURL.absoluteString hasSuffix:@"/"]) {
-            customBaseURL = [customBaseURL URLByAppendingPathComponent:@""];
-        }
-        OWSAssertDebug(customBaseURL);
-        requestURLString = [NSURL URLWithString:request.URL.absoluteString relativeToURL:customBaseURL].absoluteString;
+        NSURL *_Nullable requestURL = [OWSURLSession buildUrlWithString:request.URL.absoluteString
+                                                                baseUrl:customBaseURL];
+        OWSAssertDebug(requestURL != nil);
+        requestURLString = requestURL.absoluteString;
     } else if (request.customHost) {
         NSURL *customBaseURL = [NSURL URLWithString:request.customHost];
         OWSAssertDebug(customBaseURL);
@@ -147,8 +201,9 @@ dispatch_queue_t NetworkManagerQueue()
     OWSAssertDebug(requestURLString.length > 0);
 
     // Honor the request's headers.
-    for (NSString *headerField in request.allHTTPHeaderFields) {
-        NSString *headerValue = request.allHTTPHeaderFields[headerField];
+    for (NSString *headerField in httpHeaders.headers) {
+        NSString *_Nullable headerValue = httpHeaders.headers[headerField];
+        OWSAssertDebug(headerValue != nil);
         [self.sessionManager.requestSerializer setValue:headerValue forHTTPHeaderField:headerField];
     }
 
@@ -169,7 +224,7 @@ dispatch_queue_t NetworkManagerQueue()
     } else if ([request.HTTPMethod isEqualToString:@"DELETE"]) {
         [self.sessionManager DELETE:requestURLString parameters:request.parameters success:success failure:failure];
     } else {
-        OWSLogError(@"Trying to perform HTTP operation with unknown verb: %@", request.HTTPMethod);
+        OWSLogError(@"Trying to perform HTTP operation with unknown method: %@", request.HTTPMethod);
     }
 }
 
@@ -217,14 +272,21 @@ dispatch_queue_t NetworkManagerQueue()
 {
     AssertOnDispatchQueue(NetworkManagerQueue());
 
-    OWSSessionManager *_Nullable sessionManager = [self.pool lastObject];
-    if (sessionManager) {
+    while (YES) {
+        OWSSessionManager *_Nullable sessionManager = [self.pool lastObject];
+        if (sessionManager == nil) {
+            // Pool is drained.
+            return [OWSSessionManager new];
+        }
+
         [self.pool removeLastObject];
-    } else {
-        sessionManager = [OWSSessionManager new];
+
+        if ([self shouldDiscardSessionManager:sessionManager]) {
+            // Discard.
+        } else {
+            return sessionManager;
+        }
     }
-    OWSAssertDebug(sessionManager);
-    return sessionManager;
 }
 
 - (void)returnToPool:(OWSSessionManager *)sessionManager
@@ -232,12 +294,23 @@ dispatch_queue_t NetworkManagerQueue()
     AssertOnDispatchQueue(NetworkManagerQueue());
 
     OWSAssertDebug(sessionManager);
-    const NSUInteger kMaxPoolSize = 3;
-    if (self.pool.count >= kMaxPoolSize) {
-        // Discard
+    const NSUInteger kMaxPoolSize = 32;
+    if (self.pool.count >= kMaxPoolSize || [self shouldDiscardSessionManager:sessionManager]) {
+        // Discard.
         return;
     }
     [self.pool addObject:sessionManager];
+}
+
+- (BOOL)shouldDiscardSessionManager:(OWSSessionManager *)sessionManager
+{
+    return fabs(sessionManager.createdDate.timeIntervalSinceNow) > self.maxSessionManagerAge;
+}
+
+- (NSTimeInterval)maxSessionManagerAge
+{
+    // Throw away session managers every 5 minutes.
+    return 5 * kMinuteInterval;
 }
 
 @end
@@ -260,12 +333,12 @@ dispatch_queue_t NetworkManagerQueue()
 
 + (TSAccountManager *)tsAccountManager
 {
-    return TSAccountManager.sharedInstance;
+    return TSAccountManager.shared;
 }
 
 #pragma mark - Singleton
 
-+ (instancetype)sharedManager
++ (instancetype)shared
 {
     OWSAssertDebug(SSKEnvironment.shared.networkManager);
 
@@ -332,6 +405,12 @@ dispatch_queue_t NetworkManagerQueue()
     OWSSessionManager *sessionManager = [sessionManagerPool get];
 
     TSNetworkManagerSuccess success = ^(NSURLSessionDataTask *task, _Nullable id responseObject) {
+#if TESTABLE_BUILD
+        if (SSKDebugFlags.logCurlOnSuccess) {
+            [TSNetworkManager logCurlForTask:task];
+        }
+#endif
+
         dispatch_async(NetworkManagerQueue(), ^{
             [sessionManagerPool returnToPool:sessionManager];
         });
@@ -345,10 +424,10 @@ dispatch_queue_t NetworkManagerQueue()
 
             successParam(task, responseObject);
 
-            [OutageDetection.sharedManager reportConnectionSuccess];
+            [OutageDetection.shared reportConnectionSuccess];
         });
     };
-    TSNetworkManagerSuccess failure = ^(NSURLSessionDataTask *task, NSError *error) {
+    TSNetworkManagerFailure failure = ^(NSURLSessionDataTask *task, NSError *error) {
         dispatch_async(NetworkManagerQueue(), ^{
             [sessionManagerPool returnToPool:sessionManager];
         });
@@ -368,7 +447,7 @@ dispatch_queue_t NetworkManagerQueue()
 }
 
 #if TESTABLE_BUILD
-+ (void)logCurlForTask:(NSURLSessionDataTask *)task
++ (void)logCurlForTask:(NSURLSessionTask *)task
 {
     NSMutableArray<NSString *> *curlComponents = [NSMutableArray new];
     [curlComponents addObject:@"curl"];
@@ -391,9 +470,9 @@ dispatch_queue_t NetworkManagerQueue()
         [curlComponents addObject:[NSString stringWithFormat:@"'%@: %@'", header, headerValue]];
     }
     // Body/parameters (e.g. JSON payload)
-    if (task.originalRequest.HTTPBody) {
+    if (task.originalRequest.HTTPBody.length > 0) {
         NSString *_Nullable contentType = task.originalRequest.allHTTPHeaderFields[@"Content-Type"];
-        BOOL isJson = [contentType isEqualToString:@"application/json"];
+        BOOL isJson = [contentType isEqualToString:OWSMimeTypeJson];
         BOOL isProtobuf = [contentType isEqualToString:@"application/x-protobuf"];
         if (isJson) {
             NSString *jsonBody = [[NSString alloc] initWithData:task.originalRequest.HTTPBody
@@ -417,7 +496,7 @@ dispatch_queue_t NetworkManagerQueue()
             NSString *echoCommand =
                 [NSString stringWithFormat:@"echo -n -e %@ > %@", [echoBytes componentsJoinedByString:@""], filename];
 
-            OWSLogVerbose(@"curl for failed request: %@", echoCommand);
+            OWSLogVerbose(@"curl for request: %@", echoCommand);
             [curlComponents addObject:@"--data-binary"];
             [curlComponents addObject:[NSString stringWithFormat:@"@%@", filename]];
         } else {
@@ -425,9 +504,10 @@ dispatch_queue_t NetworkManagerQueue()
         }
     }
     // TODO: Add support for cookies.
-    [curlComponents addObject:task.originalRequest.URL.absoluteString];
+    // Double-quote the URL.
+    [curlComponents addObject:[NSString stringWithFormat:@"\"%@\"", task.originalRequest.URL.absoluteString]];
     NSString *curlCommand = [curlComponents componentsJoinedByString:@" "];
-    OWSLogVerbose(@"curl for failed request: %@", curlCommand);
+    OWSLogVerbose(@"curl for request: %@", curlCommand);
 }
 #endif
 
@@ -442,17 +522,23 @@ dispatch_queue_t NetworkManagerQueue()
     OWSAssertDebug(networkError);
 
     NSInteger statusCode = [task statusCode];
+    NSDate *retryAfterDate = [task retryAfterDate];
 
-#ifdef DEBUG
+#if TESTABLE_BUILD
     [TSNetworkManager logCurlForTask:task];
 #endif
 
-    [OutageDetection.sharedManager reportConnectionFailure];
+    [OutageDetection.shared reportConnectionFailure];
+
+    if (statusCode == AppExpiry.appExpiredStatusCode) {
+        [AppExpiry.shared setHasAppExpiredAtCurrentVersion];
+    }
 
     NSError *error = [self errorWithHTTPCode:statusCode
                                  description:nil
                                failureReason:nil
                           recoverySuggestion:nil
+                                  retryAfter:retryAfterDate
                                fallbackError:networkError];
 
     switch (statusCode) {
@@ -463,6 +549,7 @@ dispatch_queue_t NetworkManagerQueue()
                                             @"Generic error used whenever Signal can't contact the server")
                           failureReason:networkError.localizedFailureReason
                      recoverySuggestion:NSLocalizedString(@"NETWORK_ERROR_RECOVERY", nil)
+                             retryAfter:nil
                           fallbackError:networkError];
             connectivityError.isRetryable = YES;
 
@@ -514,6 +601,7 @@ dispatch_queue_t NetworkManagerQueue()
                                              failureReason:networkError.localizedFailureReason
                                         recoverySuggestion:NSLocalizedString(@"MULTIDEVICE_PAIRING_MAX_RECOVERY",
                                                                @"alert body: cannot link - reached max linked devices")
+                                                retryAfter:retryAfterDate
                                              fallbackError:networkError];
             customError.isRetryable = NO;
             failureBlock(task, customError);
@@ -525,6 +613,7 @@ dispatch_queue_t NetworkManagerQueue()
                                                description:NSLocalizedString(@"REGISTER_RATE_LIMITING_ERROR", nil)
                                              failureReason:networkError.localizedFailureReason
                                         recoverySuggestion:NSLocalizedString(@"REGISTER_RATE_LIMITING_BODY", nil)
+                                                retryAfter:retryAfterDate
                                              fallbackError:networkError];
             customError.isRetryable = NO;
             failureBlock(task, customError);
@@ -537,6 +626,7 @@ dispatch_queue_t NetworkManagerQueue()
                                                description:NSLocalizedString(@"REGISTRATION_ERROR", nil)
                                              failureReason:networkError.localizedFailureReason
                                         recoverySuggestion:NSLocalizedString(@"RELAY_REGISTERED_ERROR_RECOVERY", nil)
+                                                retryAfter:retryAfterDate
                                              fallbackError:networkError];
             customError.isRetryable = NO;
             failureBlock(task, customError);
@@ -594,6 +684,7 @@ dispatch_queue_t NetworkManagerQueue()
                    description:(nullable NSString *)description
                  failureReason:(nullable NSString *)failureReason
             recoverySuggestion:(nullable NSString *)recoverySuggestion
+                    retryAfter:(nullable NSDate *)retryAfterDate
                  fallbackError:(NSError *)fallbackError
 {
     OWSAssertDebug(fallbackError);
@@ -624,6 +715,9 @@ dispatch_queue_t NetworkManagerQueue()
 
     if (failureData) {
         [dict setObject:failureData forKey:AFNetworkingOperationFailingURLResponseDataErrorKey];
+    }
+    if (retryAfterDate) {
+        [dict setObject:retryAfterDate forKey:TSNetworkManagerErrorRetryAfterKey];
     }
 
     dict[NSUnderlyingErrorKey] = fallbackError;

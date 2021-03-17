@@ -39,13 +39,9 @@ public class PinReminderViewController: OWSViewController {
     @objc
     init(completionHandler: (() -> Void)? = nil) {
         self.completionHandler = completionHandler
-        super.init(nibName: nil, bundle: nil)
+        super.init()
         modalPresentationStyle = .custom
         transitioningDelegate = self
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
     }
 
     public override func viewWillAppear(_ animated: Bool) {
@@ -100,7 +96,7 @@ public class PinReminderViewController: OWSViewController {
 
         let titleLabel = UILabel()
         titleLabel.textColor = Theme.primaryTextColor
-        titleLabel.font = UIFont.ows_dynamicTypeTitle3Clamped.ows_semibold()
+        titleLabel.font = UIFont.ows_dynamicTypeTitle3Clamped.ows_semibold
         titleLabel.numberOfLines = 0
         titleLabel.lineBreakMode = .byWordWrapping
         titleLabel.textAlignment = .center
@@ -154,14 +150,14 @@ public class PinReminderViewController: OWSViewController {
         pinStack.autoSetDimension(.width, toSize: 227)
         pinStackRow.setContentHuggingVerticalHigh()
 
-        let font = UIFont.ows_dynamicTypeBodyClamped.ows_semibold()
+        let font = UIFont.ows_dynamicTypeBodyClamped.ows_semibold
         let buttonHeight = OWSFlatButton.heightForFont(font)
         let submitButton = OWSFlatButton.button(
             title: NSLocalizedString("BUTTON_SUBMIT",
                                      comment: "Label for the 'submit' button."),
             font: font,
             titleColor: .white,
-            backgroundColor: .ows_signalBlue,
+            backgroundColor: .ows_accentBlue,
             target: self,
             selector: #selector(submitPressed)
         )
@@ -171,7 +167,7 @@ public class PinReminderViewController: OWSViewController {
         // Secondary button
         let forgotButton = UIButton()
         forgotButton.setTitle(NSLocalizedString("PIN_REMINDER_FORGOT_PIN", comment: "Text asking if the user forgot their pin for the 'pin reminder' dialog."), for: .normal)
-        forgotButton.setTitleColor(.ows_signalBlue, for: .normal)
+        forgotButton.setTitleColor(Theme.accentBlueColor, for: .normal)
         forgotButton.titleLabel?.font = .ows_dynamicTypeSubheadlineClamped
         forgotButton.addTarget(self, action: #selector(forgotPressed), for: .touchUpInside)
         forgotButton.accessibilityIdentifier = "pinReminder.forgotButton"
@@ -219,7 +215,7 @@ public class PinReminderViewController: OWSViewController {
         let path = UIBezierPath(
             roundedRect: containerView.bounds,
             byRoundingCorners: [.topLeft, .topRight],
-            cornerRadii: CGSize(width: cornerRadius, height: cornerRadius)
+            cornerRadii: CGSize(square: cornerRadius)
         )
         let shapeLayer = CAShapeLayer()
         shapeLayer.path = path.cgPath
@@ -240,9 +236,10 @@ public class PinReminderViewController: OWSViewController {
     @objc func dismissPressed() {
         Logger.info("")
 
-        // The megaphone will persist and we'll deprecate their reminder interval if they
-        // tried and guessed wrong while the view was visible.
-        if hasGuessedWrong { OWS2FAManager.shared().updateRepetitionInterval(withWasSuccessful: false) }
+        // If the user tried and guessed wrong, we'll dismiss the megaphone and
+        // decrease their reminder interval so the next reminder comes sooner.
+        // If they didn't try and enter a PIN, we do nothing and leave the megaphone.
+        if hasGuessedWrong { OWS2FAManager.shared().reminderCompleted(withIncorrectAttempts: true) }
 
         dismiss(animated: true, completion: nil)
     }
@@ -282,7 +279,7 @@ public class PinReminderViewController: OWSViewController {
     }
 
     private func dismissAndUpdateRepetitionInterval() {
-        OWS2FAManager.shared().updateRepetitionInterval(withWasSuccessful: !hasGuessedWrong)
+        OWS2FAManager.shared().reminderCompleted(withIncorrectAttempts: hasGuessedWrong)
         dismiss(animated: true)
     }
 

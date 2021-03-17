@@ -1,12 +1,13 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 import Foundation
 import SignalServiceKit
 import SignalMessaging
 
-@objc public class AppEnvironment: NSObject {
+@objc
+public class AppEnvironment: NSObject {
 
     private static var _shared: AppEnvironment = AppEnvironment()
 
@@ -32,7 +33,7 @@ import SignalMessaging
     public var callService: CallService
 
     @objc
-    public var outboundCallInitiator: OutboundCallInitiator
+    public var outboundIndividualCallInitiator: OutboundIndividualCallInitiator
 
     @objc
     public var accountManager: AccountManager
@@ -47,9 +48,6 @@ import SignalMessaging
     public var sessionResetJobQueue: SessionResetJobQueue
 
     @objc
-    public var broadcastMediaMessageJobQueue: BroadcastMediaMessageJobQueue
-
-    @objc
     public var backup: OWSBackup
 
     @objc
@@ -58,15 +56,20 @@ import SignalMessaging
     @objc
     public var backupLazyRestore: BackupLazyRestore
 
+    @objc
+    let deviceTransferService = DeviceTransferService()
+
+    @objc
+    let audioPlayer = CVAudioPlayer()
+
     private override init() {
         self.callMessageHandler = WebRTCCallMessageHandler()
         self.callService = CallService()
-        self.outboundCallInitiator = OutboundCallInitiator()
+        self.outboundIndividualCallInitiator = OutboundIndividualCallInitiator()
         self.accountManager = AccountManager()
         self.notificationPresenter = NotificationPresenter()
         self.pushRegistrationManager = PushRegistrationManager()
         self.sessionResetJobQueue = SessionResetJobQueue()
-        self.broadcastMediaMessageJobQueue = BroadcastMediaMessageJobQueue()
         self.backup = OWSBackup()
         self.backupLazyRestore = BackupLazyRestore()
         self.userNotificationActionHandler = UserNotificationActionHandler()
@@ -77,22 +80,11 @@ import SignalMessaging
 
         YDBToGRDBMigration.add(keyStore: backup.keyValueStore, label: "backup")
         YDBToGRDBMigration.add(keyStore: AppUpdateNag.shared.keyValueStore, label: "AppUpdateNag")
-        YDBToGRDBMigration.add(keyStore: ProfileViewController.keyValueStore(), label: "ProfileViewController")
     }
 
     @objc
     public func setup() {
-        if FeatureFlags.multiRing {
-            callService.createCallUIAdapter()
-        } else {
-            AppReadiness.runNowOrWhenAppWillBecomeReady {
-                // Currently, we only build the CallUIAdapter for the primary device, which we can't
-                // determine until *after* storage has been setup. Once we create calling on all
-                // devices, we can create the callUIAdapter unconditionally, on all devices, and get
-                // rid of this.
-                self.callService.createCallUIAdapter()
-            }
-        }
+        callService.individualCallService.createCallUIAdapter()
 
         // Hang certain singletons on SSKEnvironment too.
         SSKEnvironment.shared.notificationsManager = notificationPresenter

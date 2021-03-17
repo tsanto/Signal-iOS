@@ -1,33 +1,24 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import "OWSPrimaryStorage.h"
 #import "AppContext.h"
 #import "OWSAnalytics.h"
-#import "OWSBatchMessageProcessor.h"
 #import "OWSDisappearingMessagesFinder.h"
 #import "OWSFailedAttachmentDownloadsJob.h"
 #import "OWSFailedMessagesJob.h"
 #import "OWSFileSystem.h"
 #import "OWSIncomingMessageFinder.h"
 #import "OWSIncompleteCallsJob.h"
-#import "OWSMessageReceiver.h"
 #import "OWSStorage+Subclass.h"
 #import "SSKEnvironment.h"
 #import "TSDatabaseSecondaryIndexes.h"
 #import "TSDatabaseView.h"
-#import "YAPDBMediaGalleryFinder.h"
+#import "YAPDBMediaGalleryManager.h"
 #import <SignalServiceKit/SignalServiceKit-Swift.h>
 
 NS_ASSUME_NONNULL_BEGIN
-
-NSString *const OWSUIDatabaseConnectionWillUpdateNotification = @"OWSUIDatabaseConnectionWillUpdateNotification";
-NSString *const OWSUIDatabaseConnectionDidUpdateNotification = @"OWSUIDatabaseConnectionDidUpdateNotification";
-NSString *const OWSUIDatabaseConnectionWillUpdateExternallyNotification = @"OWSUIDatabaseConnectionWillUpdateExternallyNotification";
-NSString *const OWSUIDatabaseConnectionDidUpdateExternallyNotification = @"OWSUIDatabaseConnectionDidUpdateExternallyNotification";
-
-NSString *const OWSUIDatabaseConnectionNotificationsKey = @"OWSUIDatabaseConnectionNotificationsKey";
 
 void VerifyRegistrationsForPrimaryStorage(OWSStorage *storage, dispatch_block_t completion)
 {
@@ -62,8 +53,6 @@ void VerifyRegistrationsForPrimaryStorage(OWSStorage *storage, dispatch_block_t 
 
 @implementation OWSPrimaryStorage
 
-@synthesize uiDatabaseConnection = _uiDatabaseConnection;
-
 + (nullable instancetype)shared
 {
     OWSAssertDebug(SSKEnvironment.shared.primaryStorage);
@@ -82,20 +71,6 @@ void VerifyRegistrationsForPrimaryStorage(OWSStorage *storage, dispatch_block_t 
         self.dbReadPool.connectionLimit = 10;
 
         _dbReadWriteConnection = [self newDatabaseConnection];
-        _uiDatabaseConnection = [self newDatabaseConnection];
-
-        // Increase object cache limit. Default is 250.
-        _uiDatabaseConnection.objectCacheLimit = 500;
-        [_uiDatabaseConnection beginLongLivedReadTransaction];
-        [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(yapDatabaseModified:)
-                                                     name:YapDatabaseModifiedNotification
-                                                   object:self.dbNotificationObject];
-
-        [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(yapDatabaseModifiedExternally:)
-                                                     name:YapDatabaseModifiedExternallyNotification
-                                                   object:nil];
 
         [OWSPrimaryStorage protectFiles];
 
@@ -113,58 +88,9 @@ void VerifyRegistrationsForPrimaryStorage(OWSStorage *storage, dispatch_block_t 
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
-- (void)yapDatabaseModifiedExternally:(NSNotification *)notification
-{
-    // Notify observers we're about to update the database connection
-    [[NSNotificationCenter defaultCenter] postNotificationName:OWSUIDatabaseConnectionWillUpdateExternallyNotification object:self.dbNotificationObject];
-    
-    // Move uiDatabaseConnection to the latest commit.
-    // Do so atomically, and fetch all the notifications for each commit we jump.
-    NSArray *notifications = [self.uiDatabaseConnection beginLongLivedReadTransaction];
-    
-    // Notify observers that the uiDatabaseConnection was updated
-    NSDictionary *userInfo = @{ OWSUIDatabaseConnectionNotificationsKey: notifications };
-    [[NSNotificationCenter defaultCenter] postNotificationName:OWSUIDatabaseConnectionDidUpdateExternallyNotification
-                                                        object:self.dbNotificationObject
-                                                      userInfo:userInfo];
-}
-
-- (void)yapDatabaseModified:(NSNotification *)notification
-{
-    OWSAssertIsOnMainThread();
-
-    OWSLogVerbose(@"");
-    [self updateUIDatabaseConnectionToLatest];
-}
-
-- (void)updateUIDatabaseConnectionToLatest
-{
-    OWSAssertIsOnMainThread();
-
-    // Notify observers we're about to update the database connection
-    [[NSNotificationCenter defaultCenter] postNotificationName:OWSUIDatabaseConnectionWillUpdateNotification object:self.dbNotificationObject];
-
-    // Move uiDatabaseConnection to the latest commit.
-    // Do so atomically, and fetch all the notifications for each commit we jump.
-    NSArray *notifications = [self.uiDatabaseConnection beginLongLivedReadTransaction];
-    
-    // Notify observers that the uiDatabaseConnection was updated
-    NSDictionary *userInfo = @{ OWSUIDatabaseConnectionNotificationsKey: notifications };
-    [[NSNotificationCenter defaultCenter] postNotificationName:OWSUIDatabaseConnectionDidUpdateNotification
-                                                        object:self.dbNotificationObject
-                                                      userInfo:userInfo];
-}
-
-- (YapDatabaseConnection *)uiDatabaseConnection
-{
-    OWSAssertIsOnMainThread();
-    return _uiDatabaseConnection;
-}
-
 - (void)resetStorage
 {
     _dbReadPool = nil;
-    _uiDatabaseConnection = nil;
     _dbReadWriteConnection = nil;
 
     [super resetStorage];
@@ -210,15 +136,12 @@ void VerifyRegistrationsForPrimaryStorage(OWSStorage *storage, dispatch_block_t 
                                       // registered above in asyncRegisterThreadInteractionsDatabaseView.
                                       [TSDatabaseView asyncRegisterThreadDatabaseView:self];
 
-                                      [TSDatabaseView asyncRegisterUnreadDatabaseView:self];
                                       [self asyncRegisterExtension:[TSDatabaseSecondaryIndexes registerTimeStampIndex]
                                                           withName:[TSDatabaseSecondaryIndexes
                                                                        registerTimeStampIndexExtensionName]];
 
-                                      [OWSMessageReceiver asyncRegisterDatabaseExtension:self];
                                       [YAPDBMessageContentJobFinder asyncRegisterDatabaseExtension:self];
 
-                                      [TSDatabaseView asyncRegisterUnseenDatabaseView:self];
                                       [TSDatabaseView asyncRegisterThreadOutgoingMessagesDatabaseView:self];
                                       [TSDatabaseView asyncRegisterThreadSpecialMessagesDatabaseView:self];
                                       [TSDatabaseView asyncRegisterIncompleteViewOnceMessagesDatabaseView:self];
@@ -231,12 +154,11 @@ void VerifyRegistrationsForPrimaryStorage(OWSStorage *storage, dispatch_block_t 
                                       [OWSIncompleteCallsJob asyncRegisterDatabaseExtensionsWithPrimaryStorage:self];
                                       [OWSFailedAttachmentDownloadsJob
                                           asyncRegisterDatabaseExtensionsWithPrimaryStorage:self];
-                                      [YAPDBMediaGalleryFinder asyncRegisterDatabaseExtensionsWithPrimaryStorage:self];
+                                      [YAPDBMediaGalleryManager asyncRegisterDatabaseExtensionsWithPrimaryStorage:self];
                                       [TSDatabaseView asyncRegisterLazyRestoreAttachmentsDatabaseView:self];
                                       [YAPDBJobRecordFinderSetup asyncRegisterDatabaseExtensionObjCWithStorage:self];
-                                      [YAPDBLinkedDeviceReadReceiptFinder asyncRegisterDatabaseExtensions:self];
                                       [YAPDBUserProfileFinder asyncRegisterDatabaseExtensions:self];
-                                      [YAPDBReactionFinderAdapter asyncRegisterDatabaseExtensions:self];
+                                      [OWSMessageDecryptJobFinder asyncRegisterDatabaseExtension:self];
 
                                       [self.database
                                           flushExtensionRequestsWithCompletionQueue:dispatch_get_global_queue(
@@ -471,24 +393,6 @@ void VerifyRegistrationsForPrimaryStorage(OWSStorage *storage, dispatch_block_t 
 + (YapDatabaseConnection *)dbReadWriteConnection
 {
     return OWSPrimaryStorage.shared.dbReadWriteConnection;
-}
-
-#pragma mark - Misc.
-
-- (void)touchDbAsync
-{
-    OWSLogInfo(@"");
-
-    // There appears to be a bug in YapDatabase that sometimes delays modifications
-    // made in another process (e.g. the SAE) from showing up in other processes.
-    // There's a simple workaround: a trivial write to the database flushes changes
-    // made from other processes.
-    if (StorageCoordinator.dataStoreForUI != DataStoreYdb) {
-        OWSFailDebug(@"Unexpected storage mode.");
-    }
-    [self.dbReadWriteConnection asyncReadWriteWithBlock:^(YapDatabaseReadWriteTransaction *transaction) {
-        [transaction setObject:[NSUUID UUID].UUIDString forKey:@"conversation_view_noop_mod" inCollection:@"temp"];
-    }];
 }
 
 @end

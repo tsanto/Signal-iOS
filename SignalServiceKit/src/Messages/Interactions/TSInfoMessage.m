@@ -12,8 +12,13 @@ NS_ASSUME_NONNULL_BEGIN
 
 const InfoMessageUserInfoKey InfoMessageUserInfoKeyOldGroupModel = @"InfoMessageUserInfoKeyOldGroupModel";
 const InfoMessageUserInfoKey InfoMessageUserInfoKeyNewGroupModel = @"InfoMessageUserInfoKeyNewGroupModel";
+const InfoMessageUserInfoKey InfoMessageUserInfoKeyOldDisappearingMessageToken
+    = @"InfoMessageUserInfoKeyOldDisappearingMessageToken";
+const InfoMessageUserInfoKey InfoMessageUserInfoKeyNewDisappearingMessageToken
+    = @"InfoMessageUserInfoKeyNewDisappearingMessageToken";
 const InfoMessageUserInfoKey InfoMessageUserInfoKeyGroupUpdateSourceAddress
     = @"InfoMessageUserInfoKeyGroupUpdateSourceAddress";
+const InfoMessageUserInfoKey InfoMessageUserInfoKeyProfileChanges = @"InfoMessageUserInfoKeyProfileChanges";
 
 NSUInteger TSInfoMessageSchemaVersion = 2;
 
@@ -29,7 +34,7 @@ NSUInteger TSInfoMessageSchemaVersion = 2;
 
 @implementation TSInfoMessage
 
-- (instancetype)initWithCoder:(NSCoder *)coder
+- (nullable instancetype)initWithCoder:(NSCoder *)coder
 {
     self = [super initWithCoder:coder];
     if (!self) {
@@ -56,23 +61,9 @@ NSUInteger TSInfoMessageSchemaVersion = 2;
     return self;
 }
 
-- (instancetype)initWithTimestamp:(uint64_t)timestamp
-                         inThread:(TSThread *)thread
-                      messageType:(TSInfoMessageType)infoMessage
+- (instancetype)initWithThread:(TSThread *)thread messageType:(TSInfoMessageType)infoMessage
 {
-    // MJK TODO - remove senderTimestamp
-    self = [super initMessageWithTimestamp:timestamp
-                                  inThread:thread
-                               messageBody:nil
-                             attachmentIds:@[]
-                          expiresInSeconds:0
-                           expireStartedAt:0
-                             quotedMessage:nil
-                              contactShare:nil
-                               linkPreview:nil
-                            messageSticker:nil
-                         isViewOnceMessage:NO];
-
+    self = [super initMessageWithBuilder:[TSMessageBuilder messageBuilderWithThread:thread messageBody:nil]];
     if (!self) {
         return self;
     }
@@ -84,15 +75,18 @@ NSUInteger TSInfoMessageSchemaVersion = 2;
         self.read = YES;
     }
 
+    if (_messageType == TSInfoMessageTypeGroupQuit) {
+        self.read = YES;
+    }
+
     return self;
 }
 
-- (instancetype)initWithTimestamp:(uint64_t)timestamp
-                         inThread:(TSThread *)thread
-                      messageType:(TSInfoMessageType)infoMessage
-                    customMessage:(NSString *)customMessage
+- (instancetype)initWithThread:(TSThread *)thread
+                   messageType:(TSInfoMessageType)infoMessage
+                 customMessage:(NSString *)customMessage
 {
-    self = [self initWithTimestamp:timestamp inThread:thread messageType:infoMessage];
+    self = [self initWithThread:thread messageType:infoMessage];
     if (self) {
         _customMessage = customMessage;
     }
@@ -103,7 +97,7 @@ NSUInteger TSInfoMessageSchemaVersion = 2;
                    messageType:(TSInfoMessageType)infoMessageType
            infoMessageUserInfo:(NSDictionary<InfoMessageUserInfoKey, id> *)infoMessageUserInfo
 {
-    self = [self initWithTimestamp:[NSDate ows_millisecondTimeStamp] inThread:thread messageType:infoMessageType];
+    self = [self initWithThread:thread messageType:infoMessageType];
     if (!self) {
         return self;
     }
@@ -113,12 +107,11 @@ NSUInteger TSInfoMessageSchemaVersion = 2;
     return self;
 }
 
-- (instancetype)initWithTimestamp:(uint64_t)timestamp
-                         inThread:(TSThread *)thread
-                      messageType:(TSInfoMessageType)infoMessage
-          unregisteredAddress:(SignalServiceAddress *)unregisteredAddress
+- (instancetype)initWithThread:(TSThread *)thread
+                   messageType:(TSInfoMessageType)infoMessage
+           unregisteredAddress:(SignalServiceAddress *)unregisteredAddress
 {
-    self = [self initWithTimestamp:timestamp inThread:thread messageType:infoMessage];
+    self = [self initWithThread:thread messageType:infoMessage];
     if (self) {
         _unregisteredAddress = unregisteredAddress;
     }
@@ -139,6 +132,7 @@ NSUInteger TSInfoMessageSchemaVersion = 2;
                   uniqueThreadId:(NSString *)uniqueThreadId
                    attachmentIds:(NSArray<NSString *> *)attachmentIds
                             body:(nullable NSString *)body
+                      bodyRanges:(nullable MessageBodyRanges *)bodyRanges
                     contactShare:(nullable OWSContact *)contactShare
                  expireStartedAt:(uint64_t)expireStartedAt
                        expiresAt:(uint64_t)expiresAt
@@ -149,6 +143,7 @@ NSUInteger TSInfoMessageSchemaVersion = 2;
                   messageSticker:(nullable MessageSticker *)messageSticker
                    quotedMessage:(nullable TSQuotedMessage *)quotedMessage
     storedShouldStartExpireTimer:(BOOL)storedShouldStartExpireTimer
+              wasRemotelyDeleted:(BOOL)wasRemotelyDeleted
                    customMessage:(nullable NSString *)customMessage
              infoMessageUserInfo:(nullable NSDictionary<InfoMessageUserInfoKey, id> *)infoMessageUserInfo
                      messageType:(TSInfoMessageType)messageType
@@ -163,6 +158,7 @@ NSUInteger TSInfoMessageSchemaVersion = 2;
                     uniqueThreadId:uniqueThreadId
                      attachmentIds:attachmentIds
                               body:body
+                        bodyRanges:bodyRanges
                       contactShare:contactShare
                    expireStartedAt:expireStartedAt
                          expiresAt:expiresAt
@@ -172,7 +168,8 @@ NSUInteger TSInfoMessageSchemaVersion = 2;
                        linkPreview:linkPreview
                     messageSticker:messageSticker
                      quotedMessage:quotedMessage
-      storedShouldStartExpireTimer:storedShouldStartExpireTimer];
+      storedShouldStartExpireTimer:storedShouldStartExpireTimer
+                wasRemotelyDeleted:wasRemotelyDeleted];
 
     if (!self) {
         return self;
@@ -205,11 +202,7 @@ NSUInteger TSInfoMessageSchemaVersion = 2;
     OWSAssertDebug(thread);
     OWSAssertDebug(address.isValid);
 
-    // MJK TODO - remove senderTimestamp
-    return [[self alloc] initWithTimestamp:[NSDate ows_millisecondTimeStamp]
-                                  inThread:thread
-                               messageType:TSInfoMessageUserNotRegistered
-                       unregisteredAddress:address];
+    return [[self alloc] initWithThread:thread messageType:TSInfoMessageUserNotRegistered unregisteredAddress:address];
 }
 
 - (OWSInteractionType)interactionType
@@ -238,8 +231,8 @@ NSUInteger TSInfoMessageSchemaVersion = 2;
             return NSLocalizedString(@"UNSUPPORTED_ATTACHMENT", nil);
         case TSInfoMessageUserNotRegistered:
             if (self.unregisteredAddress.isValid) {
-                NSString *recipientName =
-                    [self.contactsManager displayNameForAddress:self.unregisteredAddress transaction:transaction];
+                NSString *recipientName = [self.contactsManager displayNameForAddress:self.unregisteredAddress
+                                                                          transaction:transaction];
                 return [NSString stringWithFormat:NSLocalizedString(@"ERROR_UNREGISTERED_USER_FORMAT",
                                                       @"Format string for 'unregistered user' error. Embeds {{the "
                                                       @"unregistered user's name or signal id}}."),
@@ -268,16 +261,18 @@ NSUInteger TSInfoMessageSchemaVersion = 2;
         case TSInfoMessageUnknownProtocolVersion:
             break;
         case TSInfoMessageUserJoinedSignal: {
-                SignalServiceAddress *address = [TSContactThread contactAddressFromThreadId:self.uniqueThreadId
-                                                                                transaction:transaction];
-                NSString *recipientName = [self.contactsManager displayNameForAddress:address transaction:transaction];
-                NSString *format = NSLocalizedString(@"INFO_MESSAGE_USER_JOINED_SIGNAL_BODY_FORMAT",
-                    @"Shown in inbox and conversation when a user joins Signal, embeds the new user's {{contact "
-                    @"name}}");
-                return [NSString stringWithFormat:format, recipientName];
+            SignalServiceAddress *address = [TSContactThread contactAddressFromThreadId:self.uniqueThreadId
+                                                                            transaction:transaction];
+            NSString *recipientName = [self.contactsManager displayNameForAddress:address transaction:transaction];
+            NSString *format = NSLocalizedString(@"INFO_MESSAGE_USER_JOINED_SIGNAL_BODY_FORMAT",
+                @"Shown in inbox and conversation when a user joins Signal, embeds the new user's {{contact "
+                @"name}}");
+            return [NSString stringWithFormat:format, recipientName];
         }
         case TSInfoMessageSyncedThread:
             return @"";
+        case TSInfoMessageProfileUpdate:
+            return [self profileChangeDescriptionWithTransaction:transaction];
     }
 
     OWSFailDebug(@"Unknown info message type");
@@ -301,6 +296,7 @@ NSUInteger TSInfoMessageSchemaVersion = 2;
         case TSInfoMessageAddGroupToProfileWhitelistOffer:
         case TSInfoMessageUnknownProtocolVersion:
         case TSInfoMessageSyncedThread:
+        case TSInfoMessageProfileUpdate:
             return NO;
         case TSInfoMessageUserJoinedSignal:
             // In the conversation list, we want conversations with an unread "new user" notification to

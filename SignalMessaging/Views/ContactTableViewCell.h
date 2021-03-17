@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2019 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 NS_ASSUME_NONNULL_BEGIN
@@ -10,9 +10,22 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface ContactTableViewCell : UITableViewCell
 
+@property (assign, nonatomic) BOOL forceDarkAppearance;
+
 + (NSString *)reuseIdentifier;
 
-- (void)configureWithRecipientAddress:(SignalServiceAddress *)address;
+- (nullable instancetype)initWithCoder:(NSCoder *)coder NS_UNAVAILABLE;
+
+- (instancetype)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(nullable NSString *)reuseIdentifier;
+
+- (instancetype)initWithStyle:(UITableViewCellStyle)style
+              reuseIdentifier:(nullable NSString *)reuseIdentifier
+         allowUserInteraction:(BOOL)allowUserInteraction NS_DESIGNATED_INITIALIZER;
+
+- (void)configureWithRecipientAddressWithSneakyTransaction:(SignalServiceAddress *)address
+    NS_SWIFT_NAME(configureWithSneakyTransaction(recipientAddress:));
+
+- (void)configureWithRecipientAddress:(SignalServiceAddress *)address transaction:(SDSAnyReadTransaction *)transaction;
 
 - (void)configureWithThread:(TSThread *)thread transaction:(SDSAnyReadTransaction *)transaction;
 
@@ -21,6 +34,16 @@ NS_ASSUME_NONNULL_BEGIN
 
 // This method should be called _after_ the configure... methods.
 - (void)setAttributedSubtitle:(nullable NSAttributedString *)attributedSubtitle;
+
+// This method should be called _after_ the configure... methods.
+- (void)setSubtitle:(nullable NSString *)subtitle;
+
+- (void)setCustomName:(nullable NSString *)customName;
+- (void)setCustomNameAttributed:(nullable NSAttributedString *)customName;
+
+- (void)setCustomAvatar:(nullable UIImage *)customAvatar;
+
+- (void)setUseLargeAvatars;
 
 - (NSAttributedString *)verifiedSubtitle;
 

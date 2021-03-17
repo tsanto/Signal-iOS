@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 import Foundation
@@ -10,7 +10,8 @@ public enum NetworkManagerError: Error {
     case taskError(task: URLSessionDataTask, underlyingError: Error)
 }
 
-public extension NetworkManagerError {
+fileprivate extension NetworkManagerError {
+    // NOTE: This function should only be called from TSNetworkManager.isSwiftNetworkConnectivityError.
     var isNetworkConnectivityError: Bool {
         switch self {
         case .taskError(_, let underlyingError):
@@ -18,10 +19,19 @@ public extension NetworkManagerError {
         }
     }
 
+    // NOTE: This function should only be called from TSNetworkManager.swiftHTTPStatusCodeForError.
     var statusCode: Int {
         switch self {
         case .taskError(let task, _):
             return task.statusCode()
+        }
+    }
+
+    // NOTE: This function should only be called from TSNetworkManager.swiftHTTPRetryAfterDateForError.
+    var retryAfterDate: Date? {
+        switch self {
+        case .taskError(let task, _):
+            return task.retryAfterDate()
         }
     }
 
@@ -32,6 +42,8 @@ public extension NetworkManagerError {
         }
     }
 }
+
+// MARK: -
 
 extension NetworkManagerError: CustomNSError {
     public var errorCode: Int {
@@ -52,6 +64,7 @@ public extension TSNetworkManager {
         let (promise, resolver) = Promise<Response>.pending()
 
         self.makeRequest(request,
+                         completionQueue: DispatchQueue.global(),
                          success: { task, responseObject in
                             resolver.fulfill((task: task, responseObject: responseObject))
         },
@@ -81,8 +94,81 @@ public extension TSNetworkManager {
                 return true
             }
             return false
+        case RequestMakerError.websocketRequestError(_, _, let underlyingError):
+            return IsNetworkConnectivityFailure(underlyingError)
         default:
             return false
         }
+    }
+
+    // NOTE: This function should only be called from HTTPStatusCodeForError().
+    static func swiftHTTPStatusCodeForError(_ error: Error?) -> NSNumber? {
+        guard let error = error else {
+            return nil
+        }
+        switch error {
+        case let networkManagerError as NetworkManagerError:
+            guard networkManagerError.statusCode > 0 else {
+                return nil
+            }
+            return NSNumber(value: networkManagerError.statusCode)
+        case RequestMakerError.websocketRequestError(let statusCode, _, _):
+            guard statusCode > 0 else {
+                return nil
+            }
+            return NSNumber(value: statusCode)
+        case OWSHTTPError.requestError(let statusCode, _):
+            guard statusCode > 0 else {
+                return nil
+            }
+            return NSNumber(value: statusCode)
+        default:
+            return nil
+        }
+    }
+
+    // NOTE: This function should only be called from HTTPRetryAfterDate().
+    static func swiftHTTPRetryAfterDateForError(_ error: Error?) -> Date? {
+        guard let error = error else {
+            return nil
+        }
+        switch error {
+        case let networkManagerError as NetworkManagerError:
+            return networkManagerError.retryAfterDate
+
+        case RequestMakerError.websocketRequestError(_, _, _):
+            // TODO: Plumb retry afters through websocket errors
+            return nil
+
+        default:
+            return nil
+        }
+    }
+}
+
+// MARK: -
+
+public extension Error {
+    var httpStatusCode: Int? {
+        HTTPStatusCodeForError(self)?.intValue
+    }
+
+    var httpRetryAfterDate: Date? {
+        HTTPRetryAfterDateForError(self)
+    }
+}
+
+// MARK: -
+
+@inlinable
+public func owsFailDebugUnlessNetworkFailure(_ error: Error,
+                                             file: String = #file,
+                                             function: String = #function,
+                                             line: Int = #line) {
+    if IsNetworkConnectivityFailure(error) {
+        // Log but otherwise ignore network failures.
+        Logger.warn("Error: \(error)", file: file, function: function, line: line)
+    } else {
+        owsFailDebug("Error: \(error)", file: file, function: function, line: line)
     }
 }

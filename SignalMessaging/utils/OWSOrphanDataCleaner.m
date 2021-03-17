@@ -19,6 +19,7 @@
 #import <SignalServiceKit/SignalServiceKit-Swift.h>
 #import <SignalServiceKit/TSAttachmentStream.h>
 #import <SignalServiceKit/TSInteraction.h>
+#import <SignalServiceKit/TSMention.h>
 #import <SignalServiceKit/TSMessage.h>
 #import <SignalServiceKit/TSQuotedMessage.h>
 #import <SignalServiceKit/TSThread.h>
@@ -38,6 +39,7 @@ NSString *const OWSOrphanDataCleaner_LastCleaningDateKey = @"OWSOrphanDataCleane
 @property (nonatomic) NSSet<NSString *> *attachmentIds;
 @property (nonatomic) NSSet<NSString *> *filePaths;
 @property (nonatomic) NSSet<NSString *> *reactionIds;
+@property (nonatomic) NSSet<NSString *> *mentionIds;
 
 @end
 
@@ -346,12 +348,15 @@ typedef void (^OrphanDataBlock)(OWSOrphanData *);
     NSMutableSet<NSString *> *allAttachmentIds = [NSMutableSet new];
     // Reactions
     NSMutableSet<NSString *> *allReactionIds = [NSMutableSet new];
+    // Mentions
+    NSMutableSet<NSString *> *allMentionIds = [NSMutableSet new];
     // Threads
     __block NSSet *threadIds;
     // Messages
     NSMutableSet<NSString *> *orphanInteractionIds = [NSMutableSet new];
     NSMutableSet<NSString *> *allMessageAttachmentIds = [NSMutableSet new];
     NSMutableSet<NSString *> *allMessageReactionIds = [NSMutableSet new];
+    NSMutableSet<NSString *> *allMessageMentionIds = [NSMutableSet new];
     // Stickers
     NSMutableSet<NSString *> *activeStickerFilePaths = [NSMutableSet new];
     [self.databaseStorage readWithBlock:^(SDSAnyReadTransaction *transaction) {
@@ -431,6 +436,27 @@ typedef void (^OrphanDataBlock)(OWSOrphanData *);
                                                    [allMessageReactionIds addObject:reaction.uniqueId];
                                                }
                                            }];
+
+        if (shouldAbort) {
+            return;
+        }
+
+        [TSMention anyEnumerateWithTransaction:transaction
+                                       batched:YES
+                                         block:^(TSMention *mention, BOOL *stop) {
+                                             if (!self.isMainAppAndActive) {
+                                                 shouldAbort = YES;
+                                                 *stop = YES;
+                                                 return;
+                                             }
+                                             if (![mention isKindOfClass:[TSMention class]]) {
+                                                 return;
+                                             }
+                                             [allMentionIds addObject:mention.uniqueId];
+                                             if ([allInteractionIds containsObject:mention.uniqueMessageId]) {
+                                                 [allMessageMentionIds addObject:mention.uniqueId];
+                                             }
+                                         }];
 
         if (shouldAbort) {
             return;
@@ -541,11 +567,20 @@ typedef void (^OrphanDataBlock)(OWSOrphanData *);
     OWSLogDebug(@"orphan reactionIds: %zu", orphanReactionIds.count);
     OWSLogDebug(@"missing reactionIds: %zu", missingReactionIds.count);
 
+    NSMutableSet<NSString *> *orphanMentionIds = [allMentionIds mutableCopy];
+    [orphanMentionIds minusSet:allMessageMentionIds];
+    NSMutableSet<NSString *> *missingMentionIds = [allMessageMentionIds mutableCopy];
+    [missingMentionIds minusSet:allMentionIds];
+
+    OWSLogDebug(@"orphan mentionIds: %zu", orphanMentionIds.count);
+    OWSLogDebug(@"missing mentionIds: %zu", missingMentionIds.count);
+
     OWSOrphanData *result = [OWSOrphanData new];
     result.interactionIds = [orphanInteractionIds copy];
     result.attachmentIds = [orphanAttachmentIds copy];
     result.filePaths = [orphanFilePaths copy];
     result.reactionIds = [orphanReactionIds copy];
+    result.mentionIds = [orphanMentionIds copy];
     return result;
 }
 
@@ -567,7 +602,7 @@ typedef void (^OrphanDataBlock)(OWSOrphanData *);
     }];
 
     // Clean up once per app version.
-    NSString *currentAppVersion = AppVersion.sharedInstance.currentAppVersion;
+    NSString *currentAppVersion = AppVersion.shared.currentAppVersion;
     if (!lastCleaningVersion || ![lastCleaningVersion isEqualToString:currentAppVersion]) {
         OWSLogVerbose(@"Performing orphan data cleanup; new version: %@.", currentAppVersion);
         return YES;
@@ -675,15 +710,15 @@ typedef void (^OrphanDataBlock)(OWSOrphanData *);
                 success:^{
                     OWSLogInfo(@"Completed orphan data cleanup.");
 
-                    [self.databaseStorage writeWithBlock:^(SDSAnyWriteTransaction *transaction) {
-                        [self.keyValueStore setString:AppVersion.sharedInstance.currentAppVersion
+                    DatabaseStorageWrite(self.databaseStorage, ^(SDSAnyWriteTransaction *transaction) {
+                        [self.keyValueStore setString:AppVersion.shared.currentAppVersion
                                                   key:OWSOrphanDataCleaner_LastCleaningVersionKey
                                           transaction:transaction];
 
                         [self.keyValueStore setDate:[NSDate new]
                                                 key:OWSOrphanDataCleaner_LastCleaningDateKey
                                         transaction:transaction];
-                    }];
+                    });
 
                     if (completion) {
                         completion();
@@ -758,7 +793,7 @@ typedef void (^OrphanDataBlock)(OWSOrphanData *);
     NSDate *appLaunchTime = CurrentAppContext().appLaunchTime;
     NSTimeInterval thresholdTimestamp = appLaunchTime.timeIntervalSince1970 - kMinimumOrphanAgeSeconds;
     NSDate *thresholdDate = [NSDate dateWithTimeIntervalSince1970:thresholdTimestamp];
-    [self.databaseStorage writeWithBlock:^(SDSAnyWriteTransaction *transaction) {
+    DatabaseStorageWrite(self.databaseStorage, ^(SDSAnyWriteTransaction *transaction) {
         NSUInteger interactionsRemoved = 0;
         for (NSString *interactionId in orphanData.interactionIds) {
             if (!self.isMainAppAndActive) {
@@ -847,7 +882,34 @@ typedef void (^OrphanDataBlock)(OWSOrphanData *);
             [reaction anyRemoveWithTransaction:transaction];
         }
         OWSLogInfo(@"Deleted orphan reactions: %zu", reactionsRemoved);
-    }];
+
+        NSUInteger mentionsRemoved = 0;
+        for (NSString *mentionId in orphanData.mentionIds) {
+            if (!self.isMainAppAndActive) {
+                shouldAbort = YES;
+                return;
+            }
+            TSMention *_Nullable mention = [TSMention anyFetchWithUniqueId:mentionId transaction:transaction];
+            if (!mention) {
+                // This could just be a race condition, but it should be very unlikely.
+                OWSLogWarn(@"Could not load mention: %@", mentionId);
+                continue;
+            }
+            // Don't delete mentions which were created in the last N minutes.
+            NSDate *creationDate = mention.creationTimestamp;
+            if ([creationDate isAfterDate:thresholdDate]) {
+                OWSLogInfo(@"Skipping orphan mention due to age: %f", fabs(creationDate.timeIntervalSinceNow));
+                continue;
+            }
+            OWSLogInfo(@"Removing orphan mention: %@", mention.uniqueId);
+            mentionsRemoved++;
+            if (!shouldRemoveOrphans) {
+                continue;
+            }
+            [mention anyRemoveWithTransaction:transaction];
+        }
+        OWSLogInfo(@"Deleted orphan mentions: %zu", mentionsRemoved);
+    });
 
     if (shouldAbort) {
         return NO;
@@ -878,8 +940,11 @@ typedef void (^OrphanDataBlock)(OWSOrphanData *);
         if (!shouldRemoveOrphans) {
             continue;
         }
-        [[NSFileManager defaultManager] removeItemAtPath:filePath error:&error];
-        if (error) {
+        if (![OWSFileSystem fileOrFolderExistsAtPath:filePath]) {
+            // Already removed.
+            continue;
+        }
+        if (![OWSFileSystem deleteFile:filePath ignoreIfMissing:YES]) {
             OWSLogDebug(@"Could not remove orphan file at: %@", filePath);
             OWSFailDebug(@"Could not remove orphan file");
         }

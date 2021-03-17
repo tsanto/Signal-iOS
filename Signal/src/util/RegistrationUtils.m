@@ -53,7 +53,7 @@ NS_ASSUME_NONNULL_BEGIN
         return;
     }
 
-    ActionSheetController *actionSheet = [[ActionSheetController alloc] initWithTitle:nil message:nil];
+    ActionSheetController *actionSheet = [ActionSheetController new];
 
     [actionSheet
         addAction:[[ActionSheetAction alloc]
@@ -85,47 +85,51 @@ NS_ASSUME_NONNULL_BEGIN
                         canCancel:NO
                   backgroundBlock:^(ModalActivityIndicatorViewController *modalActivityIndicator) {
                       NSString *phoneNumber = self.tsAccountManager.reregistrationPhoneNumber;
-                      [[self.accountManager requestAccountVerificationObjCWithRecipientId:phoneNumber
-                                                                             captchaToken:nil
-                                                                                    isSMS:true]
-                              .then(^{
-                                  OWSLogInfo(@"re-registering: send verification code succeeded.");
+                      [self.accountManager requestAccountVerificationObjCWithRecipientId:phoneNumber
+                                                                            captchaToken:nil
+                                                                                   isSMS:true]
+                          .then(^{
+                              OWSAssertIsOnMainThread();
 
-                                  [modalActivityIndicator dismissWithCompletion:^{
-                                      OnboardingController *onboardingController = [OnboardingController new];
-                                      OnboardingPhoneNumber *onboardingPhoneNumber =
-                                          [[OnboardingPhoneNumber alloc] initWithE164:phoneNumber
-                                                                            userInput:phoneNumber];
-                                      [onboardingController updateWithPhoneNumber:onboardingPhoneNumber];
+                              OWSLogInfo(@"re-registering: send verification code succeeded.");
+
+                              [modalActivityIndicator dismissWithCompletion:^{
+                                  OnboardingController *onboardingController = [OnboardingController new];
+                                  OnboardingPhoneNumber *onboardingPhoneNumber =
+                                      [[OnboardingPhoneNumber alloc] initWithE164:phoneNumber userInput:phoneNumber];
+                                  [onboardingController updateWithPhoneNumber:onboardingPhoneNumber];
 
 
-                                      OnboardingVerificationViewController *viewController =
-                                          [[OnboardingVerificationViewController alloc]
-                                              initWithOnboardingController:onboardingController];
-                                      [viewController hideBackLink];
-                                      OnboardingNavigationController *navigationController =
-                                        [[OnboardingNavigationController alloc] initWithOnboardingController:onboardingController];
-                                      [navigationController setViewControllers:@[viewController] animated:NO];
-                                      navigationController.navigationBarHidden = YES;
+                                  OnboardingVerificationViewController *viewController =
+                                      [[OnboardingVerificationViewController alloc]
+                                          initWithOnboardingController:onboardingController];
+                                  [viewController hideBackLink];
+                                  OnboardingNavigationController *navigationController =
+                                      [[OnboardingNavigationController alloc]
+                                          initWithOnboardingController:onboardingController];
+                                  [navigationController setViewControllers:@[ viewController ] animated:NO];
+                                  navigationController.navigationBarHidden = YES;
 
-                                      [UIApplication sharedApplication].delegate.window.rootViewController
-                                          = navigationController;
-                                  }];
-                              })
-                              .catch(^(NSError *error) {
-                                  OWSLogError(@"re-registering: send verification code failed.");
-                                  [modalActivityIndicator dismissWithCompletion:^{
-                                      if (error.code == 400) {
-                                          [OWSActionSheets
-                                              showActionSheetWithTitle:NSLocalizedString(@"REGISTRATION_ERROR", nil)
-                                                               message:NSLocalizedString(
-                                                                           @"REGISTRATION_NON_VALID_NUMBER", nil)];
-                                      } else {
-                                          [OWSActionSheets showActionSheetWithTitle:error.localizedDescription
-                                                                            message:error.localizedRecoverySuggestion];
-                                      }
-                                  }];
-                              }) retainUntilComplete];
+                                  [UIApplication sharedApplication].delegate.window.rootViewController
+                                      = navigationController;
+                              }];
+                          })
+                          .catch(^(NSError *error) {
+                              OWSAssertIsOnMainThread();
+
+                              OWSLogError(@"re-registering: send verification code failed.");
+                              [modalActivityIndicator dismissWithCompletion:^{
+                                  if (error.code == 400) {
+                                      [OWSActionSheets
+                                          showActionSheetWithTitle:NSLocalizedString(@"REGISTRATION_ERROR", nil)
+                                                           message:NSLocalizedString(
+                                                                       @"REGISTRATION_NON_VALID_NUMBER", nil)];
+                                  } else {
+                                      [OWSActionSheets showActionSheetWithTitle:error.localizedDescription
+                                                                        message:error.localizedRecoverySuggestion];
+                                  }
+                              }];
+                          });
                   }];
 }
 

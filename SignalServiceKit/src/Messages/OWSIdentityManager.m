@@ -1,25 +1,25 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import "OWSIdentityManager.h"
 #import "AppContext.h"
 #import "AppReadiness.h"
+#import "MessageSender.h"
 #import "NSNotificationCenter+OWS.h"
 #import "NotificationsProtocol.h"
 #import "OWSError.h"
 #import "OWSFileSystem.h"
-#import "OWSMessageSender.h"
 #import "OWSOutgoingNullMessage.h"
 #import "OWSRecipientIdentity.h"
 #import "OWSVerificationStateChangeMessage.h"
 #import "OWSVerificationStateSyncMessage.h"
 #import "SSKEnvironment.h"
-#import "SSKSessionStore.h"
 #import "TSAccountManager.h"
 #import "TSContactThread.h"
 #import "TSErrorMessage.h"
 #import "TSGroupThread.h"
+#import "UnfairLock.h"
 #import <AxolotlKit/NSData+keyVersionByte.h>
 #import <Curve25519Kit/Curve25519.h>
 #import <SignalCoreKit/NSDate+OWS.h>
@@ -42,13 +42,13 @@ const NSUInteger kIdentityKeyLength = 33;
 // TODO: migrate to storing the full 33 byte representation.
 const NSUInteger kStoredIdentityKeyLength = 32;
 
-NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationName_IdentityStateDidChange";
+NSNotificationName const kNSNotificationNameIdentityStateDidChange = @"kNSNotificationNameIdentityStateDidChange";
 
 @interface OWSIdentityManager ()
 
 @property (nonatomic, readonly) SDSKeyValueStore *ownIdentityKeyValueStore;
 @property (nonatomic, readonly) SDSKeyValueStore *queuedVerificationStateSyncMessagesKeyValueStore;
-@property (nonatomic, readonly) SDSAnyDatabaseQueue *databaseQueue;
+@property (nonatomic, readonly) UnfairLock *unfairLock;
 
 @end
 
@@ -56,7 +56,7 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
 
 @implementation OWSIdentityManager
 
-+ (instancetype)sharedManager
++ (instancetype)shared
 {
     OWSAssertDebug(SSKEnvironment.shared.identityManager);
 
@@ -75,7 +75,7 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
         [[SDSKeyValueStore alloc] initWithCollection:@"TSStorageManagerIdentityKeyStoreCollection"];
     _queuedVerificationStateSyncMessagesKeyValueStore =
         [[SDSKeyValueStore alloc] initWithCollection:@"OWSIdentityManager_QueuedVerificationStateSyncMessages"];
-    _databaseQueue = [databaseStorage newDatabaseQueue];
+    _unfairLock = [UnfairLock new];
 
     OWSSingletonAssert();
 
@@ -91,7 +91,7 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
 
 #pragma mark - Dependencies
 
-- (OWSMessageSender *)messageSender
+- (MessageSender *)messageSender
 {
     OWSAssertDebug(SSKEnvironment.shared.messageSender);
 
@@ -113,7 +113,26 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
     return SSKEnvironment.shared.storageServiceManager;
 }
 
+- (SDSDatabaseStorage *)databaseStorage
+{
+    return SDSDatabaseStorage.shared;
+}
+
 #pragma mark -
+
+- (void)writeWithUnfairLock:(void(^ _Nonnull)(SDSAnyWriteTransaction *transaction))block
+{
+    [self.unfairLock withLockObjc:^{
+        DatabaseStorageWrite(self.databaseStorage, block);
+    }];
+}
+
+- (void)readWithUnfairLock:(void(^ _Nonnull)(SDSAnyReadTransaction *transaction))block
+{
+    [self.unfairLock withLockObjc:^{
+        [self.databaseStorage readWithBlock:block];
+    }];
+}
 
 - (void)observeNotifications
 {
@@ -125,7 +144,7 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
 
 - (void)generateNewIdentityKey
 {
-    [self.databaseQueue writeWithBlock:^(SDSAnyWriteTransaction *transaction) {
+    [self writeWithUnfairLock:^(SDSAnyWriteTransaction *transaction) {
         [self storeIdentityKeyPair:[Curve25519 generateKeyPair] transaction:transaction];
     }];
 }
@@ -138,19 +157,19 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
 - (NSString *)ensureAccountIdForAddress:(SignalServiceAddress *)address
                             transaction:(SDSAnyWriteTransaction *)transaction
 {
-    return [[OWSAccountIdFinder new] ensureAccountIdForAddress:address transaction:transaction];
+    return [OWSAccountIdFinder ensureAccountIdForAddress:address transaction:transaction];
 }
 
 - (nullable NSString *)accountIdForAddress:(SignalServiceAddress *)address
                                transaction:(SDSAnyReadTransaction *)transaction
 {
-    return [[OWSAccountIdFinder new] accountIdForAddress:address transaction:transaction];
+    return [OWSAccountIdFinder accountIdForAddress:address transaction:transaction];
 }
 
 - (nullable NSData *)identityKeyForAddress:(SignalServiceAddress *)address
 {
     __block NSData *_Nullable result = nil;
-    [self.databaseQueue readWithBlock:^(SDSAnyReadTransaction *transaction) {
+    [self readWithUnfairLock:^(SDSAnyReadTransaction *transaction) {
         result = [self identityKeyForAddress:address transaction:transaction];
     }];
     return result;
@@ -177,7 +196,7 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
 - (nullable ECKeyPair *)identityKeyPair
 {
     __block ECKeyPair *_Nullable identityKeyPair = nil;
-    [self.databaseQueue readWithBlock:^(SDSAnyReadTransaction *_Nonnull transaction) {
+    [self readWithUnfairLock:^(SDSAnyReadTransaction *transaction) {
         identityKeyPair = [self identityKeyPairWithTransaction:transaction];
     }];
     return identityKeyPair;
@@ -186,8 +205,8 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
 - (nullable ECKeyPair *)identityKeyPairWithTransaction:(SDSAnyReadTransaction *)transaction
 {
     OWSAssertDebug(transaction);
-    id _Nullable object =
-        [self.ownIdentityKeyValueStore getObject:kIdentityKeyStore_IdentityKey transaction:transaction];
+    id _Nullable object = [self.ownIdentityKeyValueStore getObjectForKey:kIdentityKeyStore_IdentityKey
+                                                             transaction:transaction];
     if ([object isKindOfClass:[ECKeyPair class]]) {
         return (ECKeyPair *)object;
     } else {
@@ -207,7 +226,7 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
     OWSAssertDebug(address.isValid);
 
     __block BOOL result;
-    [self.databaseQueue writeWithBlock:^(SDSAnyWriteTransaction *transaction) {
+    [self writeWithUnfairLock:^(SDSAnyWriteTransaction *transaction) {
         result = [self saveRemoteIdentity:identityKey address:address transaction:transaction];
     }];
 
@@ -248,20 +267,23 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
         [self fireIdentityStateChangeNotificationAfterTransaction:transaction];
 
         // Identity key was created, schedule a social graph backup
-        [self.storageServiceManager recordPendingUpdatesWithUpdatedIds:@[ accountId ]];
+        [self.storageServiceManager recordPendingUpdatesWithUpdatedAccountIds:@[ accountId ]];
 
         return NO;
     }
 
     if (![existingIdentity.identityKey isEqual:identityKey]) {
         OWSVerificationState verificationState;
+        BOOL wasIdentityVerified;
         switch (existingIdentity.verificationState) {
             case OWSVerificationStateDefault:
                 verificationState = OWSVerificationStateDefault;
+                wasIdentityVerified = NO;
                 break;
             case OWSVerificationStateVerified:
             case OWSVerificationStateNoLongerVerified:
                 verificationState = OWSVerificationStateNoLongerVerified;
+                wasIdentityVerified = YES;
                 break;
         }
 
@@ -269,7 +291,10 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
             accountId,
             OWSVerificationStateToString(existingIdentity.verificationState),
             OWSVerificationStateToString(verificationState));
-        [self createIdentityChangeInfoMessageForAccountId:accountId transaction:transaction];
+
+        [self createIdentityChangeInfoMessageForAccountId:accountId
+                                      wasIdentityVerified:wasIdentityVerified
+                                              transaction:transaction];
 
         [[[OWSRecipientIdentity alloc] initWithAccountId:accountId
                                              identityKey:identityKey
@@ -285,7 +310,7 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
         [self fireIdentityStateChangeNotificationAfterTransaction:transaction];
 
         // Identity key was changed, schedule a social graph backup
-        [self.storageServiceManager recordPendingUpdatesWithUpdatedIds:@[ accountId ]];
+        [self.storageServiceManager recordPendingUpdatesWithUpdatedAccountIds:@[ accountId ]];
 
         return YES;
     }
@@ -301,7 +326,7 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
     OWSAssertDebug(identityKey.length == kStoredIdentityKeyLength);
     OWSAssertDebug(address.isValid);
 
-    [self.databaseQueue writeWithBlock:^(SDSAnyWriteTransaction *_Nonnull transaction) {
+    [self writeWithUnfairLock:^(SDSAnyWriteTransaction *transaction) {
         [self setVerificationState:verificationState
                        identityKey:identityKey
                            address:address
@@ -356,7 +381,7 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
     }
 
     // Verification state has changed, schedule a social graph backup
-    [self.storageServiceManager recordPendingUpdatesWithUpdatedIds:@[ accountId ]];
+    [self.storageServiceManager recordPendingUpdatesWithUpdatedAccountIds:@[ accountId ]];
 
     [self fireIdentityStateChangeNotificationAfterTransaction:transaction];
 }
@@ -364,7 +389,7 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
 - (OWSVerificationState)verificationStateForAddress:(SignalServiceAddress *)address
 {
     __block OWSVerificationState result;
-    [self.databaseQueue readWithBlock:^(SDSAnyReadTransaction *_Nonnull transaction) {
+    [self readWithUnfairLock:^(SDSAnyReadTransaction *transaction) {
         result = [self verificationStateForAddress:address transaction:transaction];
     }];
     return result;
@@ -395,14 +420,23 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
     OWSAssertDebug(address.isValid);
 
     __block OWSRecipientIdentity *_Nullable result;
-    [self.databaseQueue readWithBlock:^(SDSAnyReadTransaction *_Nonnull transaction) {
-        NSString *_Nullable accountId = [self accountIdForAddress:address transaction:transaction];
-        if (accountId) {
-            result = [OWSRecipientIdentity anyFetchWithUniqueId:accountId transaction:transaction];
-        }
+    [self readWithUnfairLock:^(SDSAnyReadTransaction *transaction) {
+        result = [self recipientIdentityForAddress:address transaction:transaction];
     }];
 
     return result;
+}
+
+- (nullable OWSRecipientIdentity *)recipientIdentityForAddress:(SignalServiceAddress *)address
+                                                   transaction:(SDSAnyReadTransaction *)transaction
+{
+    OWSAssertDebug(address.isValid);
+
+    NSString *_Nullable accountId = [self accountIdForAddress:address transaction:transaction];
+    if (accountId) {
+        return [OWSRecipientIdentity anyFetchWithUniqueId:accountId transaction:transaction];
+    }
+    return nil;
 }
 
 - (nullable OWSRecipientIdentity *)untrustedIdentityForSendingToAddress:(SignalServiceAddress *)address
@@ -410,7 +444,7 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
     OWSAssertDebug(address.isValid);
 
     __block OWSRecipientIdentity *_Nullable result;
-    [self.databaseQueue readWithBlock:^(SDSAnyReadTransaction *_Nonnull transaction) {
+    [self readWithUnfairLock:^(SDSAnyReadTransaction *transaction) {
         NSString *_Nullable accountId = [self accountIdForAddress:address transaction:transaction];
         OWSRecipientIdentity *_Nullable recipientIdentity;
 
@@ -439,7 +473,7 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
 - (void)fireIdentityStateChangeNotificationAfterTransaction:(SDSAnyWriteTransaction *)transaction
 {
     [transaction addAsyncCompletion:^{
-        [[NSNotificationCenter defaultCenter] postNotificationName:kNSNotificationName_IdentityStateDidChange
+        [[NSNotificationCenter defaultCenter] postNotificationName:kNSNotificationNameIdentityStateDidChange
                                                             object:nil];
     }];
 }
@@ -468,8 +502,8 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
     OWSAssertDebug(direction != TSMessageDirectionUnknown);
     OWSAssertDebug(transaction);
 
-    SignalServiceAddress *_Nullable address = [[OWSAccountIdFinder new] addressForAccountId:accountId
-                                                                                transaction:transaction];
+    SignalServiceAddress *_Nullable address = [OWSAccountIdFinder addressForAccountId:accountId
+                                                                          transaction:transaction];
 
     if (address.isLocalAddress) {
         ECKeyPair *_Nullable localIdentityKeyPair = [self identityKeyPairWithTransaction:transaction];
@@ -539,20 +573,24 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
 }
 
 - (void)createIdentityChangeInfoMessageForAccountId:(NSString *)accountId
+                                wasIdentityVerified:(BOOL)wasIdentityVerified
                                         transaction:(SDSAnyWriteTransaction *)transaction
 {
-    SignalServiceAddress *_Nullable address = [[OWSAccountIdFinder new] addressForAccountId:accountId
-                                                                                transaction:transaction];
+    SignalServiceAddress *_Nullable address = [OWSAccountIdFinder addressForAccountId:accountId
+                                                                          transaction:transaction];
 
     if (!address.isValid) {
         OWSFailDebug(@"address unexpectedly invalid for accountId: %@", accountId);
         return;
     }
 
-    [self createIdentityChangeInfoMessageForAddress:address transaction:transaction];
+    [self createIdentityChangeInfoMessageForAddress:address
+                                wasIdentityVerified:wasIdentityVerified
+                                        transaction:transaction];
 }
 
 - (void)createIdentityChangeInfoMessageForAddress:(SignalServiceAddress *)address
+                              wasIdentityVerified:(BOOL)wasIdentityVerified
                                       transaction:(SDSAnyWriteTransaction *)transaction
 {
     OWSAssertDebug(address.isValid);
@@ -564,11 +602,15 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
                                                                               transaction:transaction];
     OWSAssertDebug(contactThread != nil);
 
-    TSErrorMessage *errorMessage = [TSErrorMessage nonblockingIdentityChangeInThread:contactThread address:address];
+    TSErrorMessage *errorMessage = [TSErrorMessage nonblockingIdentityChangeInThread:contactThread
+                                                                             address:address
+                                                                 wasIdentityVerified:wasIdentityVerified];
     [messages addObject:errorMessage];
 
     for (TSGroupThread *groupThread in [TSGroupThread groupThreadsWithAddress:address transaction:transaction]) {
-        [messages addObject:[TSErrorMessage nonblockingIdentityChangeInThread:groupThread address:address]];
+        [messages addObject:[TSErrorMessage nonblockingIdentityChangeInThread:groupThread
+                                                                      address:address
+                                                          wasIdentityVerified:wasIdentityVerified]];
     }
 
     // MJK TODO - why not save immediately, why build up this array?
@@ -599,9 +641,7 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
 {
     OWSAssertIsOnMainThread();
 
-    [AppReadiness runNowOrWhenAppDidBecomeReady:^{
-        [self syncQueuedVerificationStates];
-    }];
+    AppReadinessRunNowOrWhenAppDidBecomeReadyAsync(^{ [self syncQueuedVerificationStates]; });
 }
 
 - (void)syncQueuedVerificationStates
@@ -617,7 +657,7 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
             return;
         }
         NSMutableArray<OWSVerificationStateSyncMessage *> *messages = [NSMutableArray new];
-        [self.databaseQueue readWithBlock:^(SDSAnyReadTransaction *transaction) {
+        [self readWithUnfairLock:^(SDSAnyReadTransaction *transaction) {
             [self.queuedVerificationStateSyncMessagesKeyValueStore
                 enumerateKeysAndObjectsWithTransaction:transaction
                                                  block:^(NSString *key, id value, BOOL *stop) {
@@ -631,9 +671,9 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
                                                          NSString *phoneNumber = (NSString *)value;
                                                          address = [[SignalServiceAddress alloc]
                                                              initWithPhoneNumber:phoneNumber];
-                                                         OWSAccountIdFinder *accountIdFinder = [OWSAccountIdFinder new];
-                                                         accountId = [accountIdFinder accountIdForAddress:address
-                                                                                              transaction:transaction];
+                                                         accountId =
+                                                             [OWSAccountIdFinder accountIdForAddress:address
+                                                                                         transaction:transaction];
                                                          if (accountId == nil) {
                                                              OWSFailDebug(@"Missing accountId for address.");
                                                              return;
@@ -724,10 +764,10 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
                     OWSLogInfo(@"Successfully sent verification state sync message");
 
                     // Record that this verification state was successfully synced.
-                    [self.databaseQueue writeWithBlock:^(SDSAnyWriteTransaction *transaction) {
+                [self writeWithUnfairLock:^(SDSAnyWriteTransaction *transaction) {
                         [self clearSyncMessageForAddress:message.verificationForRecipientAddress
                                              transaction:transaction];
-                    }];
+                }];
                 }
                 failure:^(NSError *error) {
                     OWSLogError(@"Failed to send verification state sync message with error: %@", error);
@@ -739,7 +779,7 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
                 OWSLogInfo(@"Removing retries for syncing verification state, since user is no longer registered: %@",
                     message.verificationForRecipientAddress);
                 // Otherwise this will fail forever.
-                [self.databaseQueue writeWithBlock:^(SDSAnyWriteTransaction *transaction) {
+                [self writeWithUnfairLock:^(SDSAnyWriteTransaction *transaction) {
                     [self clearSyncMessageForAddress:message.verificationForRecipientAddress transaction:transaction];
                 }];
             }
@@ -953,21 +993,16 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
     TSContactThread *contactThread = [TSContactThread getOrCreateThreadWithContactAddress:address
                                                                               transaction:transaction];
     OWSAssertDebug(contactThread);
-    // MJK TODO - should be safe to remove senderTimestamp
-    [messages addObject:[[OWSVerificationStateChangeMessage alloc] initWithTimestamp:[NSDate ows_millisecondTimeStamp]
-                                                                              thread:contactThread
-                                                                    recipientAddress:address
-                                                                   verificationState:verificationState
-                                                                       isLocalChange:isLocalChange]];
+    [messages addObject:[[OWSVerificationStateChangeMessage alloc] initWithThread:contactThread
+                                                                 recipientAddress:address
+                                                                verificationState:verificationState
+                                                                    isLocalChange:isLocalChange]];
 
     for (TSGroupThread *groupThread in [TSGroupThread groupThreadsWithAddress:address transaction:transaction]) {
-        // MJK TODO - should be safe to remove senderTimestamp
-        [messages
-            addObject:[[OWSVerificationStateChangeMessage alloc] initWithTimestamp:[NSDate ows_millisecondTimeStamp]
-                                                                            thread:groupThread
-                                                                  recipientAddress:address
-                                                                 verificationState:verificationState
-                                                                     isLocalChange:isLocalChange]];
+        [messages addObject:[[OWSVerificationStateChangeMessage alloc] initWithThread:groupThread
+                                                                     recipientAddress:address
+                                                                    verificationState:verificationState
+                                                                        isLocalChange:isLocalChange]];
     }
 
     // MJK TODO - why not save in-line, vs storing in an array and saving the array?
@@ -1017,7 +1052,7 @@ NSString *const kNSNotificationName_IdentityStateDidChange = @"kNSNotificationNa
 - (nullable NSData *)identityKeyForRecipientId:(NSString *)accountId
 {
     __block NSData *_Nullable result = nil;
-    [self.databaseQueue readWithBlock:^(SDSAnyReadTransaction *transaction) {
+    [self readWithUnfairLock:^(SDSAnyReadTransaction *transaction) {
         result = [self identityKeyForAccountId:accountId transaction:transaction];
     }];
     return result;

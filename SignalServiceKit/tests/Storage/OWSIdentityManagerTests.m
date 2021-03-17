@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2019 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import "MockSSKEnvironment.h"
@@ -30,17 +30,16 @@
 
 - (OWSIdentityManager *)identityManager
 {
-    return [OWSIdentityManager sharedManager];
+    return [OWSIdentityManager shared];
 }
 
 - (void)testNewEmptyKey
 {
     NSData *newKey = [Randomness generateRandomBytes:32];
-    SignalServiceAddress *address = [[SignalServiceAddress alloc] initWithPhoneNumber:@"test@gmail.com"];
+    SignalServiceAddress *address = [[SignalServiceAddress alloc] initWithPhoneNumber:@"+12223334444"];
 
     [self writeWithBlock:^(SDSAnyWriteTransaction *transaction) {
-        __unused NSString *accountId = [[OWSAccountIdFinder new] ensureAccountIdForAddress:address
-                                                                               transaction:transaction];
+        __unused NSString *accountId = [OWSAccountIdFinder ensureAccountIdForAddress:address transaction:transaction];
 
         XCTAssert([self.identityManager isTrustedIdentityKey:newKey
                                                      address:address
@@ -56,7 +55,7 @@
 - (void)testAlreadyRegisteredKey
 {
     NSData *newKey = [Randomness generateRandomBytes:32];
-    SignalServiceAddress *address = [[SignalServiceAddress alloc] initWithPhoneNumber:@"test@gmail.com"];
+    SignalServiceAddress *address = [[SignalServiceAddress alloc] initWithPhoneNumber:@"+12223334444"];
 
     [self writeWithBlock:^(SDSAnyWriteTransaction *transaction) {
         [self.identityManager saveRemoteIdentity:newKey address:address transaction:transaction];
@@ -76,7 +75,7 @@
 - (void)testChangedKey
 {
     NSData *originalKey = [Randomness generateRandomBytes:32];
-    SignalServiceAddress *address = [[SignalServiceAddress alloc] initWithPhoneNumber:@"test@protonmail.com"];
+    SignalServiceAddress *address = [[SignalServiceAddress alloc] initWithPhoneNumber:@"+12223334444"];
 
     [self writeWithBlock:^(SDSAnyWriteTransaction *transaction) {
         [self.identityManager saveRemoteIdentity:originalKey address:address transaction:transaction];

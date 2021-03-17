@@ -17,11 +17,7 @@ public class SplashViewController: OWSViewController, ExperienceUpgradeView {
 
     init(experienceUpgrade: ExperienceUpgrade) {
         self.experienceUpgrade = experienceUpgrade
-        super.init(nibName: nil, bundle: nil)
-    }
-
-    required init?(coder aDecoder: NSCoder) {
-        notImplemented()
+        super.init()
     }
 
     // MARK: - View lifecycle
@@ -34,9 +30,6 @@ public class SplashViewController: OWSViewController, ExperienceUpgradeView {
     public override func viewDidLoad() {
         super.viewDidLoad()
 
-        // TODO Xcode 11: Delete this once we're compiling only in Xcode 11
-        #if swift(>=5.1)
-
         // Don't allow interactive dismissal.
         if #available(iOS 13, *) {
             presentationController?.delegate = self
@@ -44,12 +37,6 @@ public class SplashViewController: OWSViewController, ExperienceUpgradeView {
         } else {
             addDismissGesture()
         }
-
-        #else
-
-        addDismissGesture()
-
-        #endif
     }
 
     // MARK: -
@@ -59,6 +46,12 @@ public class SplashViewController: OWSViewController, ExperienceUpgradeView {
         swipeGesture.direction = .down
         view.addGestureRecognizer(swipeGesture)
         view.isUserInteractionEnabled = true
+    }
+
+    var isDismissWithoutCompleting = false
+    public func dismissWithoutCompleting(animated flag: Bool, completion: (() -> Void)? = nil) {
+        isDismissWithoutCompleting = true
+        dismiss(animated: flag, completion: completion)
     }
 
     @objc
@@ -75,7 +68,7 @@ public class SplashViewController: OWSViewController, ExperienceUpgradeView {
 
         // Only complete on dismissal if we're ready to do so. This is by
         // default always true, but can be overriden on an individual basis.
-        guard isReadyToComplete else { return }
+        guard isReadyToComplete, !isDismissWithoutCompleting else { return }
 
         markAsComplete()
     }

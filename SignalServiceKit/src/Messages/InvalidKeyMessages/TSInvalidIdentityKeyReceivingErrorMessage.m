@@ -1,16 +1,13 @@
 //
-//  Copyright (c) 2019 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import "TSInvalidIdentityKeyReceivingErrorMessage.h"
 #import "OWSFingerprint.h"
 #import "OWSIdentityManager.h"
 #import "OWSMessageManager.h"
-#import "OWSMessageReceiver.h"
 #import "SSKEnvironment.h"
-#import "SSKSessionStore.h"
 #import "TSContactThread.h"
-#import "TSErrorMessage_privateConstructor.h"
 #import <AxolotlKit/NSData+keyVersionByte.h>
 #import <AxolotlKit/PreKeyWhisperMessage.h>
 #import <SignalServiceKit/SignalServiceKit-Swift.h>
@@ -32,28 +29,37 @@ __attribute__((deprecated)) @interface TSInvalidIdentityKeyReceivingErrorMessage
     SSKProtoEnvelope *_Nullable _envelope;
 }
 
+- (nullable instancetype)initWithCoder:(NSCoder *)coder
+{
+    return [super initWithCoder:coder];
+}
+
 #ifdef TESTABLE_BUILD
 // We no longer create these messages, but they might exist on legacy clients so it's useful to be able to
 // create them with the debug UI
 + (nullable instancetype)untrustedKeyWithEnvelope:(SSKProtoEnvelope *)envelope
                                   withTransaction:(SDSAnyWriteTransaction *)transaction
 {
-    TSContactThread *contactThread =
-        [TSContactThread getOrCreateThreadWithContactAddress:envelope.sourceAddress transaction:transaction];
+    TSContactThread *contactThread = [TSContactThread getOrCreateThreadWithContactAddress:envelope.sourceAddress
+                                                                              transaction:transaction];
 
     // Legit usage of senderTimestamp, references message which failed to decrypt
     TSInvalidIdentityKeyReceivingErrorMessage *errorMessage =
         [[self alloc] initForUnknownIdentityKeyWithTimestamp:envelope.timestamp
-                                                    inThread:contactThread
+                                                      thread:contactThread
                                             incomingEnvelope:envelope];
     return errorMessage;
 }
+#endif
 
 - (nullable instancetype)initForUnknownIdentityKeyWithTimestamp:(uint64_t)timestamp
-                                                       inThread:(TSThread *)thread
+                                                         thread:(TSThread *)thread
                                                incomingEnvelope:(SSKProtoEnvelope *)envelope
 {
-    self = [self initWithTimestamp:timestamp inThread:thread failedMessageType:TSErrorMessageWrongTrustedIdentityKey];
+    TSErrorMessageBuilder *builder =
+        [TSErrorMessageBuilder errorMessageBuilderWithThread:thread errorType:TSErrorMessageWrongTrustedIdentityKey];
+    builder.timestamp = timestamp;
+    self = [super initErrorMessageWithBuilder:builder];
     if (!self) {
         return self;
     }
@@ -69,7 +75,6 @@ __attribute__((deprecated)) @interface TSInvalidIdentityKeyReceivingErrorMessage
 
     return self;
 }
-#endif
 
 // --- CODE GENERATION MARKER
 
@@ -85,6 +90,7 @@ __attribute__((deprecated)) @interface TSInvalidIdentityKeyReceivingErrorMessage
                   uniqueThreadId:(NSString *)uniqueThreadId
                    attachmentIds:(NSArray<NSString *> *)attachmentIds
                             body:(nullable NSString *)body
+                      bodyRanges:(nullable MessageBodyRanges *)bodyRanges
                     contactShare:(nullable OWSContact *)contactShare
                  expireStartedAt:(uint64_t)expireStartedAt
                        expiresAt:(uint64_t)expiresAt
@@ -95,9 +101,11 @@ __attribute__((deprecated)) @interface TSInvalidIdentityKeyReceivingErrorMessage
                   messageSticker:(nullable MessageSticker *)messageSticker
                    quotedMessage:(nullable TSQuotedMessage *)quotedMessage
     storedShouldStartExpireTimer:(BOOL)storedShouldStartExpireTimer
+              wasRemotelyDeleted:(BOOL)wasRemotelyDeleted
                        errorType:(TSErrorMessageType)errorType
                             read:(BOOL)read
                 recipientAddress:(nullable SignalServiceAddress *)recipientAddress
+             wasIdentityVerified:(BOOL)wasIdentityVerified
                         authorId:(NSString *)authorId
                     envelopeData:(nullable NSData *)envelopeData
 {
@@ -109,6 +117,7 @@ __attribute__((deprecated)) @interface TSInvalidIdentityKeyReceivingErrorMessage
                     uniqueThreadId:uniqueThreadId
                      attachmentIds:attachmentIds
                               body:body
+                        bodyRanges:bodyRanges
                       contactShare:contactShare
                    expireStartedAt:expireStartedAt
                          expiresAt:expiresAt
@@ -119,9 +128,11 @@ __attribute__((deprecated)) @interface TSInvalidIdentityKeyReceivingErrorMessage
                     messageSticker:messageSticker
                      quotedMessage:quotedMessage
       storedShouldStartExpireTimer:storedShouldStartExpireTimer
+                wasRemotelyDeleted:wasRemotelyDeleted
                          errorType:errorType
                               read:read
-                  recipientAddress:recipientAddress];
+                  recipientAddress:recipientAddress
+               wasIdentityVerified:wasIdentityVerified];
 
     if (!self) {
         return self;
@@ -141,7 +152,8 @@ __attribute__((deprecated)) @interface TSInvalidIdentityKeyReceivingErrorMessage
 {
     if (!_envelope) {
         NSError *error;
-        SSKProtoEnvelope *_Nullable envelope = [SSKProtoEnvelope parseData:self.envelopeData error:&error];
+        SSKProtoEnvelope *_Nullable envelope = [[SSKProtoEnvelope alloc] initWithSerializedData:self.envelopeData
+                                                                                          error:&error];
         if (error || envelope == nil) {
             OWSFailDebug(@"Could not parse proto: %@", error);
         } else {
@@ -166,21 +178,26 @@ __attribute__((deprecated)) @interface TSInvalidIdentityKeyReceivingErrorMessage
         return;
     }
 
-    [[OWSIdentityManager sharedManager] saveRemoteIdentity:newKey address:self.envelope.sourceAddress];
+    [[OWSIdentityManager shared] saveRemoteIdentity:newKey address:self.envelope.sourceAddress];
 
     // Decrypt this and any old messages for the newly accepted key
-    NSArray<TSInvalidIdentityKeyReceivingErrorMessage *> *messagesToDecrypt =
+    NSArray<TSInvalidIdentityKeyReceivingErrorMessage *> *_Nullable messagesToDecrypt =
         [self.threadWithSneakyTransaction receivedMessagesForInvalidKey:newKey];
 
     for (TSInvalidIdentityKeyReceivingErrorMessage *errorMessage in messagesToDecrypt) {
-        [SSKEnvironment.shared.messageReceiver handleReceivedEnvelopeData:errorMessage.envelopeData];
-
-        // Here we remove the existing error message because handleReceivedEnvelope will either
-        //  1.) succeed and create a new successful message in the thread or...
-        //  2.) fail and create a new identical error message in the thread.
-        [self.databaseStorage writeWithBlock:^(SDSAnyWriteTransaction *transaction) {
-            [errorMessage anyRemoveWithTransaction:transaction];
-        }];
+        [MessageProcessor.shared
+            processEncryptedEnvelopeData:errorMessage.envelopeData
+                       encryptedEnvelope:nil
+                 serverDeliveryTimestamp:0
+                              completion:^(NSError *error) {
+                                  // Here we remove the existing error message because handleReceivedEnvelope will
+                                  // either
+                                  //  1.) succeed and create a new successful message in the thread or...
+                                  //  2.) fail and create a new identical error message in the thread.
+                                  DatabaseStorageWrite(self.databaseStorage, ^(SDSAnyWriteTransaction *transaction) {
+                                      [errorMessage anyRemoveWithTransaction:transaction];
+                                  });
+                              }];
     }
 }
 
@@ -217,6 +234,13 @@ __attribute__((deprecated)) @interface TSInvalidIdentityKeyReceivingErrorMessage
         // for existing messages before we were storing author id.
         return self.envelope.sourceE164;
     }
+}
+
+- (SignalServiceAddress *)theirSignalAddress
+{
+    OWSAssertDebug(self.envelope.sourceAddress != nil);
+
+    return self.envelope.sourceAddress;
 }
 
 @end

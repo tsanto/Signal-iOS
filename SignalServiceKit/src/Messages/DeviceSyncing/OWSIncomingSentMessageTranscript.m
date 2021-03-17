@@ -62,7 +62,11 @@ NS_ASSUME_NONNULL_BEGIN
     _expirationStartedAt = sentProto.expirationStartTimestamp;
     _expirationDuration = _dataMessage.expireTimer;
     _body = _dataMessage.body;
+    if (_dataMessage.bodyRanges.count > 0) {
+        _bodyRanges = [[MessageBodyRanges alloc] initWithProtos:_dataMessage.bodyRanges];
+    }
     _dataMessageTimestamp = _dataMessage.timestamp;
+    _disappearingMessageToken = [DisappearingMessageToken tokenForProtoExpireTimer:_dataMessage.expireTimer];
 
     SSKProtoGroupContext *_Nullable groupContextV1 = _dataMessage.group;
     SSKProtoGroupContextV2 *_Nullable groupContextV2 = _dataMessage.groupV2;
@@ -112,6 +116,10 @@ NS_ASSUME_NONNULL_BEGIN
         _recipientAddress = sentProto.destinationAddress;
     }
 
+    if (_groupId != nil) {
+        [TSGroupThread ensureGroupIdMappingForGroupId:_groupId transaction:transaction];
+    }
+
     if (_dataMessage.hasFlags) {
         uint32_t flags = _dataMessage.flags;
         _isExpirationTimerUpdate = (flags & SSKProtoDataMessageFlagsExpirationTimerUpdate) != 0;
@@ -139,23 +147,25 @@ NS_ASSUME_NONNULL_BEGIN
             _thread = groupThread;
 
             if (groupContextV1 != nil) {
+                SignalServiceAddress *_Nullable localAddress
+                    = OWSIncomingSentMessageTranscript.tsAccountManager.localAddress;
+                if (localAddress == nil) {
+                    OWSFailDebug(@"Missing localAddress.");
+                    return nil;
+                }
+
                 if (_thread == nil) {
-                    SignalServiceAddress *_Nullable localAddress
-                        = OWSIncomingSentMessageTranscript.tsAccountManager.localAddress;
-                    if (localAddress == nil) {
-                        OWSFailDebug(@"Missing localAddress.");
-                        return nil;
-                    }
                     NSArray<SignalServiceAddress *> *members = @[ localAddress ];
                     NSError *_Nullable groupError;
-                    _thread = [GroupManager upsertExistingGroupV1WithGroupId:_groupId
-                                                                        name:groupContextV1.name
-                                                                  avatarData:nil
-                                                                     members:members
-                                                    groupUpdateSourceAddress:localAddress
-                                                           infoMessagePolicy:InfoMessagePolicyAlways
-                                                                 transaction:transaction
-                                                                       error:&groupError]
+                    _thread = [GroupManager remoteUpsertExistingGroupV1WithGroupId:_groupId
+                                                                              name:groupContextV1.name
+                                                                        avatarData:nil
+                                                                           members:members
+                                                          disappearingMessageToken:self.disappearingMessageToken
+                                                          groupUpdateSourceAddress:localAddress
+                                                                 infoMessagePolicy:InfoMessagePolicyAlways
+                                                                       transaction:transaction
+                                                                             error:&groupError]
                                   .groupThread;
                     if (groupError != nil || _thread == nil) {
                         OWSFailDebug(@"Could not create group: %@", groupError);
@@ -181,7 +191,12 @@ NS_ASSUME_NONNULL_BEGIN
                     return nil;
                 }
                 uint32_t revision = groupContextV2.revision;
-                if (revision > groupThread.groupModel.groupV2Revision) {
+                if (![groupThread.groupModel isKindOfClass:TSGroupModelV2.class]) {
+                    OWSFailDebug(@"Invalid group model.");
+                    return nil;
+                }
+                TSGroupModelV2 *groupModel = (TSGroupModelV2 *)groupThread.groupModel;
+                if (revision > groupModel.revision) {
                     OWSFailDebug(@"Unexpected revision.");
                     return nil;
                 }
@@ -193,8 +208,9 @@ NS_ASSUME_NONNULL_BEGIN
             _thread = [TSContactThread getOrCreateThreadWithContactAddress:_recipientAddress transaction:transaction];
         }
 
-        _quotedMessage =
-            [TSQuotedMessage quotedMessageForDataMessage:_dataMessage thread:_thread transaction:transaction];
+        _quotedMessage = [TSQuotedMessage quotedMessageForDataMessage:_dataMessage
+                                                               thread:_thread
+                                                          transaction:transaction];
         _contact = [OWSContacts contactForDataMessage:_dataMessage transaction:transaction];
 
         NSError *linkPreviewError;

@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2019 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 import UIKit
@@ -8,7 +8,7 @@ import UIKit
 public class OWSButton: UIButton {
 
     @objc
-    var block: () -> Void = { }
+    public var block: () -> Void = { }
 
     // MARK: -
 
@@ -43,7 +43,11 @@ public class OWSButton: UIButton {
     }
 
     @objc
-    public func setImage(imageName: String) {
+    public func setImage(imageName: String?) {
+        guard let imageName = imageName else {
+            setImage(nil, for: .normal)
+            return
+        }
         if let image = UIImage(named: imageName) {
             setImage(image.withRenderingMode(.alwaysTemplate), for: .normal)
         } else {
@@ -63,9 +67,9 @@ public class OWSButton: UIButton {
 
         let buttonWidth: CGFloat = 40
         button.layer.cornerRadius = buttonWidth / 2
-        button.autoSetDimensions(to: CGSize(width: buttonWidth, height: buttonWidth))
+        button.autoSetDimensions(to: CGSize(square: buttonWidth))
 
-        button.backgroundColor = .ows_signalBlue
+        button.backgroundColor = .ows_accentBlue
 
         return button
     }

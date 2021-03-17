@@ -1,16 +1,16 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import "OWSOutgoingReceiptManager.h"
 #import "AppReadiness.h"
+#import "MessageSender.h"
 #import "OWSError.h"
-#import "OWSMessageSender.h"
 #import "OWSReceiptsForSenderMessage.h"
 #import "SSKEnvironment.h"
 #import "TSContactThread.h"
 #import "TSYapDatabaseObject.h"
-#import <Reachability/Reachability.h>
+#import <PromiseKit/AnyPromise.h>
 #import <SignalServiceKit/SignalServiceKit-Swift.h>
 
 NS_ASSUME_NONNULL_BEGIN
@@ -21,8 +21,6 @@ typedef NS_ENUM(NSUInteger, OWSReceiptType) {
 };
 
 @interface OWSOutgoingReceiptManager ()
-
-@property (nonatomic) Reachability *reachability;
 
 // This property should only be accessed on the serialQueue.
 @property (nonatomic) BOOL isProcessing;
@@ -54,7 +52,7 @@ typedef NS_ENUM(NSUInteger, OWSReceiptType) {
 
 #pragma mark -
 
-+ (instancetype)sharedManager
++ (instancetype)shared
 {
     OWSAssert(SSKEnvironment.shared.outgoingReceiptManager);
 
@@ -69,19 +67,15 @@ typedef NS_ENUM(NSUInteger, OWSReceiptType) {
         return self;
     }
 
-    self.reachability = [Reachability reachabilityForInternetConnection];
-
     OWSSingletonAssert();
 
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(reachabilityChanged)
-                                                 name:kReachabilityChangedNotification
+                                                 name:SSKReachability.owsReachabilityDidChange
                                                object:nil];
 
     // Start processing.
-    [AppReadiness runNowOrWhenAppDidBecomeReady:^{
-        [self process];
-    }];
+    AppReadinessRunNowOrWhenAppDidBecomeReadyAsync(^{ [self process]; });
 
     return self;
 }
@@ -93,11 +87,16 @@ typedef NS_ENUM(NSUInteger, OWSReceiptType) {
 
 #pragma mark - Dependencies
 
-- (OWSMessageSender *)messageSender
+- (MessageSender *)messageSender
 {
     OWSAssertDebug(SSKEnvironment.shared.messageSender);
 
     return SSKEnvironment.shared.messageSender;
+}
+
+- (id<SSKReachabilityManager>)reachabilityManager
+{
+    return SSKEnvironment.shared.reachabilityManager;
 }
 
 #pragma mark -
@@ -126,7 +125,7 @@ typedef NS_ENUM(NSUInteger, OWSReceiptType) {
 
         self.isProcessing = YES;
 
-        if (!self.reachability.isReachable) {
+        if (!self.reachabilityManager.isReachable) {
             // No network availability; abort.
             self.isProcessing = NO;
             return;
@@ -159,7 +158,6 @@ typedef NS_ENUM(NSUInteger, OWSReceiptType) {
                     [self process];
                 });
         });
-        [completionPromise retainUntilComplete];
     });
 }
 
@@ -287,12 +285,12 @@ typedef NS_ENUM(NSUInteger, OWSReceiptType) {
 
     NSSet<NSNumber *> *_Nullable oldUUIDTimestamps;
     if (address.uuidString) {
-        oldUUIDTimestamps = [store getObject:address.uuidString transaction:transaction];
+        oldUUIDTimestamps = [store getObjectForKey:address.uuidString transaction:transaction];
     }
 
     NSSet<NSNumber *> *_Nullable oldPhoneNumberTimestamps;
     if (address.phoneNumber) {
-        oldPhoneNumberTimestamps = [store getObject:address.phoneNumber transaction:transaction];
+        oldPhoneNumberTimestamps = [store getObjectForKey:address.phoneNumber transaction:transaction];
     }
 
     NSSet<NSNumber *> *_Nullable oldTimestamps;
@@ -315,9 +313,10 @@ typedef NS_ENUM(NSUInteger, OWSReceiptType) {
 
     [store setObject:newTimestamps key:identifier transaction:transaction];
 
-    [transaction addAsyncCompletion:^{
-        [self process];
-    }];
+    [transaction addAsyncCompletionWithQueue:dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0)
+                                       block:^{
+                                           [self process];
+                                       }];
 }
 
 - (void)dequeueReceiptsForAddress:(SignalServiceAddress *)address
@@ -331,17 +330,17 @@ typedef NS_ENUM(NSUInteger, OWSReceiptType) {
         OWSFailDebug(@"Invalid timestamps.");
         return;
     }
-    [self.databaseStorage asyncWriteWithBlock:^(SDSAnyWriteTransaction *transaction) {
+    DatabaseStorageAsyncWrite(self.databaseStorage, ^(SDSAnyWriteTransaction *transaction) {
         NSString *identifier = address.uuidString ?: address.phoneNumber;
 
         NSSet<NSNumber *> *_Nullable oldUUIDTimestamps;
         if (address.uuidString) {
-            oldUUIDTimestamps = [store getObject:address.uuidString transaction:transaction];
+            oldUUIDTimestamps = [store getObjectForKey:address.uuidString transaction:transaction];
         }
 
         NSSet<NSNumber *> *_Nullable oldPhoneNumberTimestamps;
         if (address.phoneNumber) {
-            oldPhoneNumberTimestamps = [store getObject:address.phoneNumber transaction:transaction];
+            oldPhoneNumberTimestamps = [store getObjectForKey:address.phoneNumber transaction:transaction];
         }
 
         NSSet<NSNumber *> *_Nullable oldTimestamps = oldUUIDTimestamps;
@@ -368,7 +367,7 @@ typedef NS_ENUM(NSUInteger, OWSReceiptType) {
         } else {
             [store removeValueForKey:identifier transaction:transaction];
         }
-    }];
+    });
 }
 
 - (void)reachabilityChanged

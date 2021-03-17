@@ -50,7 +50,14 @@ class KeyBackupServiceTests: SSKBaseTestSwift {
             XCTAssertEqual(vector.masterKey, decryptedMasterKey)
 
             databaseStorage.write { transaction in
-                KeyBackupService.store(vector.masterKey, pinType: .init(forPin: vector.pin), encodedVerificationString: "", transaction: transaction)
+                KeyBackupService.store(
+                    masterKey: vector.masterKey,
+                    isMasterKeyBackedUp: true,
+                    pinType: .init(forPin: vector.pin),
+                    encodedVerificationString: "",
+                    enclaveName: "",
+                    transaction: transaction
+                )
             }
 
             let registrationLockToken = KeyBackupService.deriveRegistrationLockToken()
@@ -88,7 +95,14 @@ class KeyBackupServiceTests: SSKBaseTestSwift {
         XCTAssertEqual(expectedEncodedVerificationString, encodedVerificationString)
 
         databaseStorage.write { transaction in
-            KeyBackupService.store(Data(repeating: 0x00, count: 32), pinType: .init(forPin: pin), encodedVerificationString: encodedVerificationString, transaction: transaction)
+            KeyBackupService.store(
+                masterKey: Data(repeating: 0x00, count: 32),
+                isMasterKeyBackedUp: true,
+                pinType: .init(forPin: pin),
+                encodedVerificationString: encodedVerificationString,
+                enclaveName: "",
+                transaction: transaction
+            )
         }
 
         // The correct PIN returns as valid.
@@ -122,7 +136,7 @@ class KeyBackupServiceTests: SSKBaseTestSwift {
             var derivedKey: KeyBackupService.DerivedKey {
                 switch type {
                 case .storageServiceRecord:
-                    return .storageServiceRecord(identifier: StorageService.StorageIdentifier(data: associatedValueData))
+                    return .storageServiceRecord(identifier: StorageService.StorageIdentifier(data: associatedValueData, type: .contact))
                 case .storageServiceManifest:
                     return .storageServiceManifest(version: associatedValueData.withUnsafeBytes { $0.pointee })
                 }
@@ -132,7 +146,14 @@ class KeyBackupServiceTests: SSKBaseTestSwift {
                 KeyBackupService.clearKeys(transaction: transaction)
                 switch mode {
                 case .local:
-                    KeyBackupService.store(masterKeyData!, pinType: .numeric, encodedVerificationString: "", transaction: transaction)
+                    KeyBackupService.store(
+                        masterKey: masterKeyData!,
+                        isMasterKeyBackedUp: true,
+                        pinType: .numeric,
+                        encodedVerificationString: "",
+                        enclaveName: "",
+                        transaction: transaction
+                    )
                 case .synced:
                     KeyBackupService.storeSyncedKey(type: .storageService, data: storageServiceKeyData, transaction: transaction)
                 }

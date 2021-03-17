@@ -1,12 +1,10 @@
 //
-//  Copyright (c) 2019 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import "MediaDetailViewController.h"
 #import "AttachmentSharing.h"
 #import "ConversationViewController.h"
-#import "ConversationViewItem.h"
-#import "OWSMessageCell.h"
 #import "Signal-Swift.h"
 #import "TSAttachmentStream.h"
 #import "TSInteraction.h"
@@ -33,11 +31,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) UIView *replacingView;
 
 @property (nonatomic) TSAttachmentStream *attachmentStream;
-@property (nonatomic, nullable) id<ConversationViewItem> viewItem;
 @property (nonatomic, nullable) UIImage *image;
 
 @property (nonatomic, nullable) OWSVideoPlayer *videoPlayer;
-@property (nonatomic, nullable) UIButton *playVideoButton;
+@property (nonatomic, nullable) UIView *playVideoButton;
 @property (nonatomic, nullable) PlayerProgressBar *videoProgressBar;
 @property (nonatomic, nullable) UIBarButtonItem *videoPlayBarButton;
 @property (nonatomic, nullable) UIBarButtonItem *videoPauseBarButton;
@@ -46,6 +43,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, nullable) NSLayoutConstraint *mediaViewLeadingConstraint;
 @property (nonatomic, nullable) NSLayoutConstraint *mediaViewTopConstraint;
 @property (nonatomic, nullable) NSLayoutConstraint *mediaViewTrailingConstraint;
+
+@property (nonatomic) BOOL shouldAutoPlayVideo;
+@property (nonatomic) BOOL hasAutoPlayedVideo;
 
 @end
 
@@ -58,16 +58,15 @@ NS_ASSUME_NONNULL_BEGIN
     [self stopAnyVideo];
 }
 
-- (instancetype)initWithGalleryItemBox:(GalleryItemBox *)galleryItemBox
-                              viewItem:(nullable id<ConversationViewItem>)viewItem
+- (instancetype)initWithGalleryItemBox:(GalleryItemBox *)galleryItemBox shouldAutoPlayVideo:(BOOL)shouldAutoPlayVideo
 {
-    self = [super initWithNibName:nil bundle:nil];
+    self = [super init];
     if (!self) {
         return self;
     }
 
     _galleryItemBox = galleryItemBox;
-    _viewItem = viewItem;
+    self.shouldAutoPlayVideo = shouldAutoPlayVideo;
 
     // We cache the image data in case the attachment stream is deleted.
     __weak MediaDetailViewController *weakSelf = self;
@@ -112,6 +111,17 @@ NS_ASSUME_NONNULL_BEGIN
 {
     [super viewWillAppear:animated];
     [self resetMediaFrame];
+}
+
+- (void)viewDidAppear:(BOOL)animated
+{
+    [super viewDidAppear:animated];
+
+    if (self.isVideo && self.shouldAutoPlayVideo && !self.hasAutoPlayedVideo) {
+
+        [self playVideo];
+        self.hasAutoPlayedVideo = YES;
+    }
 }
 
 - (void)viewDidLayoutSubviews
@@ -176,15 +186,11 @@ NS_ASSUME_NONNULL_BEGIN
     scrollView.showsHorizontalScrollIndicator = NO;
     scrollView.decelerationRate = UIScrollViewDecelerationRateFast;
 
-    if (@available(iOS 11.0, *)) {
-        [scrollView contentInsetAdjustmentBehavior];
-    } else {
-        self.automaticallyAdjustsScrollViewInsets = NO;
-    }
+    [scrollView contentInsetAdjustmentBehavior];
 
-    [scrollView ows_autoPinToSuperviewEdges];
+    [scrollView autoPinEdgesToSuperviewEdges];
 
-    if (self.isAnimated) {
+    if (self.attachmentStream.shouldBeRenderedByYY) {
         if (self.attachmentStream.isValidImage) {
             YYImage *animatedGif = [YYImage imageWithContentsOfFile:self.attachmentStream.originalFilePath];
             YYAnimatedImageView *animatedView = [YYAnimatedImageView new];
@@ -253,19 +259,27 @@ NS_ASSUME_NONNULL_BEGIN
         [videoProgressBar autoPinToTopLayoutGuideOfViewController:self withInset:kVideoProgressBarHeight];
         [videoProgressBar autoSetDimension:ALDimensionHeight toSize:kVideoProgressBarHeight];
 
-        UIButton *playVideoButton = [UIButton new];
+        __weak MediaDetailViewController *weakSelf = self;
+        OWSButton *playVideoButton = [[OWSButton alloc] initWithBlock:^{ [weakSelf playVideo]; }];
         self.playVideoButton = playVideoButton;
-
-        [playVideoButton addTarget:self action:@selector(playVideo) forControlEvents:UIControlEventTouchUpInside];
-
-        UIImage *playImage = [UIImage imageNamed:@"play_button"];
-        [playVideoButton setBackgroundImage:playImage forState:UIControlStateNormal];
-        playVideoButton.contentMode = UIViewContentModeScaleAspectFill;
-
         [self.view addSubview:playVideoButton];
 
+        OWSLayerView *playVideoCircleView = [OWSLayerView circleView];
+        playVideoCircleView.backgroundColor = [UIColor.ows_whiteColor colorWithAlphaComponent:0.75f];
+        playVideoCircleView.userInteractionEnabled = NO;
+        [playVideoButton addSubview:playVideoCircleView];
+
+        UIImageView *playVideoIconView = [UIImageView withTemplateImageName:@"play-solid-32"
+                                                                  tintColor:UIColor.ows_blackColor];
+        playVideoIconView.userInteractionEnabled = NO;
+        [playVideoButton addSubview:playVideoIconView];
+
         CGFloat playVideoButtonWidth = ScaleFromIPhone5(70);
+        CGFloat playVideoIconWidth = ScaleFromIPhone5(30);
         [playVideoButton autoSetDimensionsToSize:CGSizeMake(playVideoButtonWidth, playVideoButtonWidth)];
+        [playVideoIconView autoSetDimensionsToSize:CGSizeMake(playVideoIconWidth, playVideoIconWidth)];
+        [playVideoCircleView autoPinEdgesToSuperviewEdges];
+        [playVideoIconView autoCenterInSuperview];
         [playVideoButton autoCenterInSuperview];
     }
 }
@@ -379,7 +393,7 @@ NS_ASSUME_NONNULL_BEGIN
 
     CGFloat xOffset = MAX(0, (scrollViewSize.width - imageViewSize.width) / 2);
     self.mediaViewLeadingConstraint.constant = xOffset;
-    self.mediaViewTrailingConstraint.constant = xOffset;
+    self.mediaViewTrailingConstraint.constant = -xOffset;
 }
 
 - (void)scrollViewDidZoom:(UIScrollView *)scrollView

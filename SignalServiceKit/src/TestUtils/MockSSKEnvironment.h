@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2019 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import "SSKEnvironment.h"
@@ -13,18 +13,15 @@ NS_ASSUME_NONNULL_BEGIN
 
 // Redeclare these properties as mutable so that tests can replace singletons.
 @property (nonatomic) id<ContactsManagerProtocol> contactsManager;
-@property (nonatomic) OWSMessageSender *messageSender;
+@property (nonatomic) MessageSender *messageSender;
 @property (nonatomic) id<ProfileManagerProtocol> profileManager;
 @property (nonatomic, nullable) OWSPrimaryStorage *primaryStorage;
-@property (nonatomic) ContactsUpdater *contactsUpdater;
 @property (nonatomic) TSNetworkManager *networkManager;
 @property (nonatomic) OWSMessageManager *messageManager;
 @property (nonatomic) OWSBlockingManager *blockingManager;
 @property (nonatomic) OWSIdentityManager *identityManager;
 @property (nonatomic) id<OWSUDManager> udManager;
 @property (nonatomic) OWSMessageDecrypter *messageDecrypter;
-@property (nonatomic) OWSBatchMessageProcessor *batchMessageProcessor;
-@property (nonatomic) OWSMessageReceiver *messageReceiver;
 @property (nonatomic) TSSocketManager *socketManager;
 @property (nonatomic) TSAccountManager *tsAccountManager;
 @property (nonatomic) OWS2FAManager *ows2FAManager;
@@ -35,9 +32,11 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) id<SSKReachabilityManager> reachabilityManager;
 @property (nonatomic) id<OWSTypingIndicators> typingIndicators;
 @property (nonatomic) OWSAttachmentDownloads *attachmentDownloads;
+@property (nonatomic) SignalServiceAddressCache *signalServiceAddressCache;
 @property (nonatomic) StickerManager *stickerManager;
 @property (nonatomic) SDSDatabaseStorage *databaseStorage;
 @property (nonatomic) AccountServiceClient *accountServiceClient;
+@property (nonatomic) id<GroupsV2> groupsV2;
 
 @end
 
@@ -47,7 +46,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (void)activate;
 
-- (instancetype)init;
+- (instancetype)init NS_DESIGNATED_INITIALIZER;
 
 @end
 

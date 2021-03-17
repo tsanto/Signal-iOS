@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import "OWSFailedAttachmentDownloadsJob.h"
@@ -67,8 +67,8 @@ static NSString *const OWSFailedAttachmentDownloadsJobAttachmentStateIndex = @"i
 - (void)runSync
 {
     __block uint count = 0;
-    [self.databaseStorage
-        writeWithBlock:^(SDSAnyWriteTransaction *transaction) {
+    DatabaseStorageWrite(
+        self.databaseStorage, ^(SDSAnyWriteTransaction *transaction) {
             [self enumerateAttemptingOutAttachmentsWithBlock:^(TSAttachmentPointer *attachment) {
                 // sanity check
                 if (attachment.state == TSAttachmentPointerStateFailed) {
@@ -86,19 +86,17 @@ static NSString *const OWSFailedAttachmentDownloadsJobAttachmentStateIndex = @"i
                         break;
                     case TSAttachmentPointerStateEnqueued:
                     case TSAttachmentPointerStateDownloading:
-                        [attachment anyUpdateAttachmentPointerWithTransaction:transaction
-                                                                        block:^(TSAttachmentPointer *attachment) {
-                                                                            attachment.state
-                                                                                = TSAttachmentPointerStateFailed;
-                                                                        }];
+                        [attachment updateWithAttachmentPointerState:TSAttachmentPointerStateFailed
+                                                         transaction:transaction];
                         count++;
                         return;
+                    case TSAttachmentPointerStatePendingManualDownload:
+                        // Do nothing. We don't want to mark this attachment as failed.
+                        break;
                 }
-
-
             }
                                                  transaction:transaction];
-        }];
+        });
 
     if (count > 0) {
         OWSLogDebug(@"Marked %u attachments as failed", count);

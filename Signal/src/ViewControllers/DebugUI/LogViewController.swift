@@ -1,21 +1,17 @@
 //
-//  Copyright (c) 2019 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 import Foundation
 
 @objc
-public class LogPickerViewController: OWSTableViewController {
+public class LogPickerViewController: OWSTableViewController2 {
     let logDirUrl: URL
 
     @objc
     public init(logDirUrl: URL) {
         self.logDirUrl = logDirUrl
         super.init()
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
     }
 
     public override func viewDidLoad() {

@@ -28,6 +28,8 @@ typedef NS_ENUM(NSUInteger, OWSRegistrationState) {
     OWSRegistrationState_Reregistering,
 };
 
+NSString *NSStringForOWSRegistrationState(OWSRegistrationState value);
+
 @interface TSAccountManager : NSObject
 
 @property (nonatomic, readonly) SDSKeyValueStore *keyValueStore;
@@ -37,7 +39,7 @@ typedef NS_ENUM(NSUInteger, OWSRegistrationState) {
 
 #pragma mark - Initializers
 
-+ (TSAccountManager *)sharedInstance;
++ (TSAccountManager *)shared;
 
 - (void)warmCaches;
 
@@ -106,10 +108,17 @@ typedef NS_ENUM(NSUInteger, OWSRegistrationState) {
 - (void)setStoredDeviceName:(NSString *)deviceName transaction:(SDSAnyWriteTransaction *)transaction;
 
 - (UInt32)storedDeviceId;
+- (UInt32)storedDeviceIdWithTransaction:(SDSAnyReadTransaction *)transaction;
 
 /// Onboarding state
 - (BOOL)isOnboarded;
 - (void)setIsOnboarded:(BOOL)isOnboarded transaction:(SDSAnyWriteTransaction *)transaction;
+
+- (BOOL)isDiscoverableByPhoneNumber;
+- (BOOL)hasDefinedIsDiscoverableByPhoneNumber;
+- (void)setIsDiscoverableByPhoneNumber:(BOOL)isDiscoverableByPhoneNumber
+                  updateStorageService:(BOOL)updateStorageService
+                           transaction:(SDSAnyWriteTransaction *)transaction;
 
 #pragma mark - Register with phone number
 
@@ -152,6 +161,13 @@ typedef NS_ENUM(NSUInteger, OWSRegistrationState) {
 - (BOOL)isDeregistered;
 - (void)setIsDeregistered:(BOOL)isDeregistered;
 
+#pragma mark - Transfer
+
+@property (nonatomic) BOOL isTransferInProgress;
+@property (nonatomic) BOOL wasTransferred;
+
+#pragma mark - Backup
+
 - (BOOL)hasPendingBackupRestoreDecision;
 - (void)setHasPendingBackupRestoreDecision:(BOOL)value;
 
@@ -172,8 +188,6 @@ typedef NS_ENUM(NSUInteger, OWSRegistrationState) {
 #ifdef TESTABLE_BUILD
 - (void)registerForTestsWithLocalNumber:(NSString *)localNumber uuid:(NSUUID *)uuid;
 #endif
-
-- (AnyPromise *)updateAccountAttributes __attribute__((warn_unused_result));
 
 @end
 

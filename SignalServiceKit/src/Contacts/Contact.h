@@ -22,6 +22,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property (nullable, readonly, nonatomic) NSString *firstName;
 @property (nullable, readonly, nonatomic) NSString *lastName;
+@property (nullable, readonly, nonatomic) NSString *nickname;
 @property (readonly, nonatomic) NSString *fullName;
 @property (readonly, nonatomic) NSString *comparableNameFirstLast;
 @property (readonly, nonatomic) NSString *comparableNameLastFirst;
@@ -43,6 +44,7 @@ NS_ASSUME_NONNULL_BEGIN
                      cnContactId:(nullable NSString *)cnContactId
                        firstName:(nullable NSString *)firstName
                         lastName:(nullable NSString *)lastName
+                        nickname:(nullable NSString *)nickname
                         fullName:(NSString *)fullName
             userTextPhoneNumbers:(NSArray<NSString *> *)userTextPhoneNumbers
               phoneNumberNameMap:(NSDictionary<NSString *, NSString *> *)phoneNumberNameMap
@@ -50,8 +52,8 @@ NS_ASSUME_NONNULL_BEGIN
                           emails:(NSArray<NSString *> *)emails
                  imageDataToHash:(nullable NSData *)imageDataToHash NS_DESIGNATED_INITIALIZER;
 
-- (instancetype)init NS_UNAVAILABLE;
 + (instancetype)new NS_UNAVAILABLE;
+- (instancetype)init NS_UNAVAILABLE;
 
 + (nullable Contact *)contactWithVCardData:(NSData *)data;
 + (nullable CNContact *)cnContactWithVCardData:(NSData *)data;

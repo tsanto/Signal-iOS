@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import "IncomingGroupsV2MessageJob.h"
@@ -16,7 +16,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (instancetype)initWithEnvelopeData:(NSData *)envelopeData
                        plaintextData:(NSData *_Nullable)plaintextData
+                             groupId:(NSData *_Nullable)groupId
                      wasReceivedByUD:(BOOL)wasReceivedByUD
+             serverDeliveryTimestamp:(uint64_t)serverDeliveryTimestamp
 {
     OWSAssertDebug(envelopeData);
 
@@ -27,7 +29,9 @@ NS_ASSUME_NONNULL_BEGIN
 
     _envelopeData = envelopeData;
     _plaintextData = plaintextData;
+    _groupId = groupId;
     _wasReceivedByUD = wasReceivedByUD;
+    _serverDeliveryTimestamp = serverDeliveryTimestamp;
     _createdAt = [NSDate new];
 
     return self;
@@ -44,7 +48,9 @@ NS_ASSUME_NONNULL_BEGIN
                       uniqueId:(NSString *)uniqueId
                        createdAt:(NSDate *)createdAt
                     envelopeData:(NSData *)envelopeData
+                         groupId:(nullable NSData *)groupId
                    plaintextData:(nullable NSData *)plaintextData
+         serverDeliveryTimestamp:(uint64_t)serverDeliveryTimestamp
                  wasReceivedByUD:(BOOL)wasReceivedByUD
 {
     self = [super initWithGrdbId:grdbId
@@ -56,7 +62,9 @@ NS_ASSUME_NONNULL_BEGIN
 
     _createdAt = createdAt;
     _envelopeData = envelopeData;
+    _groupId = groupId;
     _plaintextData = plaintextData;
+    _serverDeliveryTimestamp = serverDeliveryTimestamp;
     _wasReceivedByUD = wasReceivedByUD;
 
     return self;
@@ -74,7 +82,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable SSKProtoEnvelope *)envelope
 {
     NSError *error;
-    SSKProtoEnvelope *_Nullable result = [SSKProtoEnvelope parseData:self.envelopeData error:&error];
+    SSKProtoEnvelope *_Nullable result = [[SSKProtoEnvelope alloc] initWithSerializedData:self.envelopeData
+                                                                                    error:&error];
 
     if (error) {
         OWSFailDebug(@"paring SSKProtoEnvelope failed with error: %@", error);

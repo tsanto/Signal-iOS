@@ -12,10 +12,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 @implementation OWSProfileKeyMessage
 
-- (instancetype)initWithTimestamp:(uint64_t)timestamp inThread:(TSThread *)thread
+- (instancetype)initWithThread:(TSThread *)thread
 {
-    TSOutgoingMessageBuilder *messageBuilder = [[TSOutgoingMessageBuilder alloc] initWithThread:thread];
-    messageBuilder.timestamp = timestamp;
+    TSOutgoingMessageBuilder *messageBuilder = [TSOutgoingMessageBuilder outgoingMessageBuilderWithThread:thread];
     return [super initOutgoingMessageWithBuilder:messageBuilder];
 }
 
@@ -48,13 +47,6 @@ NS_ASSUME_NONNULL_BEGIN
     [builder setTimestamp:self.timestamp];
     [ProtoUtils addLocalProfileKeyToDataMessageBuilder:builder];
     [builder setFlags:SSKProtoDataMessageFlagsProfileKeyUpdate];
-
-    if (address.isValid) {
-        // Once we've shared our profile key with a user (perhaps due to being
-        // a member of a whitelisted group), make sure they're whitelisted.
-        id<ProfileManagerProtocol> profileManager = SSKEnvironment.shared.profileManager;
-        [profileManager addUserToProfileWhitelist:address];
-    }
 
     NSError *error;
     SSKProtoDataMessage *_Nullable dataProto = [builder buildAndReturnError:&error];

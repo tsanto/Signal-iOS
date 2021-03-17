@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2019 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import "SelectThreadViewController.h"
@@ -26,16 +26,15 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface SelectThreadViewController () <OWSTableViewControllerDelegate,
     ThreadViewHelperDelegate,
-    ContactsViewHelperDelegate,
+    ContactsViewHelperObserver,
     UISearchBarDelegate,
     FindByPhoneNumberDelegate,
-    SDSDatabaseStorageObserver>
+    UIDatabaseSnapshotDelegate>
 
-@property (nonatomic, readonly) ContactsViewHelper *contactsViewHelper;
 @property (nonatomic, readonly) FullTextSearcher *fullTextSearcher;
 @property (nonatomic, readonly) ThreadViewHelper *threadViewHelper;
 
-@property (nonatomic, readonly) OWSTableViewController *tableViewController;
+@property (nonatomic, readonly) OWSTableViewController2 *tableViewController;
 
 @property (nonatomic, readonly) UISearchBar *searchBar;
 
@@ -52,6 +51,11 @@ NS_ASSUME_NONNULL_BEGIN
     return SDSDatabaseStorage.shared;
 }
 
+- (ContactsViewHelper *)contactsViewHelper
+{
+    return Environment.shared.contactsViewHelper;
+}
+
 #pragma mark -
 
 - (void)loadView
@@ -65,12 +69,12 @@ NS_ASSUME_NONNULL_BEGIN
 
     self.view.backgroundColor = Theme.backgroundColor;
 
-    _contactsViewHelper = [[ContactsViewHelper alloc] initWithDelegate:self];
+    [self.contactsViewHelper addObserver:self];
     _fullTextSearcher = FullTextSearcher.shared;
     _threadViewHelper = [ThreadViewHelper new];
     _threadViewHelper.delegate = self;
 
-    [self.databaseStorage addDatabaseStorageObserver:self];
+    [self.databaseStorage appendUIDatabaseSnapshotDelegate:self];
 
     [self createViews];
 
@@ -99,7 +103,7 @@ NS_ASSUME_NONNULL_BEGIN
     [header setContentHuggingVerticalHigh];
 
     // Table
-    _tableViewController = [OWSTableViewController new];
+    _tableViewController = [OWSTableViewController2 new];
     _tableViewController.delegate = self;
     [self.view addSubview:self.tableViewController.view];
     [self.tableViewController.view autoPinEdgeToSuperviewSafeArea:ALEdgeLeading];
@@ -110,9 +114,27 @@ NS_ASSUME_NONNULL_BEGIN
     self.tableViewController.tableView.estimatedRowHeight = 60;
 }
 
-#pragma mark - SDSDatabaseStorageObserver
+#pragma mark - UIDatabaseSnapshotDelegate
 
-- (void)databaseStorageDidUpdateWithChange:(SDSDatabaseStorageChange *)change
+- (void)uiDatabaseSnapshotWillUpdate
+{
+    OWSAssertIsOnMainThread();
+    OWSAssertDebug(AppReadiness.isAppReady);
+}
+
+- (void)uiDatabaseSnapshotDidUpdateWithDatabaseChanges:(id<UIDatabaseChanges>)databaseChanges
+{
+    OWSAssertIsOnMainThread();
+    OWSAssertDebug(AppReadiness.isAppReady);
+
+    if (![databaseChanges didUpdateModelWithCollection:TSThread.collection]) {
+        return;
+    }
+
+    [self updateTableContents];
+}
+
+- (void)uiDatabaseSnapshotDidUpdateExternally
 {
     OWSAssertIsOnMainThread();
     OWSAssertDebug(AppReadiness.isAppReady);
@@ -120,15 +142,7 @@ NS_ASSUME_NONNULL_BEGIN
     [self updateTableContents];
 }
 
-- (void)databaseStorageDidUpdateExternally
-{
-    OWSAssertIsOnMainThread();
-    OWSAssertDebug(AppReadiness.isAppReady);
-
-    [self updateTableContents];
-}
-
-- (void)databaseStorageDidReset
+- (void)uiDatabaseSnapshotDidReset
 {
     OWSAssertIsOnMainThread();
     OWSAssertDebug(AppReadiness.isAppReady);
@@ -195,6 +209,7 @@ NS_ASSUME_NONNULL_BEGIN
     [self.databaseStorage uiReadWithBlock:^(SDSAnyReadTransaction *transaction) {
         filteredThreads = [self filteredThreadsWithTransaction:transaction];
     }];
+
     for (TSThread *thread in filteredThreads) {
         [recentChatsSection
             addItem:[OWSTableItem
@@ -239,7 +254,6 @@ NS_ASSUME_NONNULL_BEGIN
 
                             return cell;
                         }
-                        customRowHeight:UITableViewAutomaticDimension
                         actionBlock:^{
                             typeof(self) strongSelf = weakSelf;
                             if (!strongSelf) {
@@ -251,8 +265,6 @@ NS_ASSUME_NONNULL_BEGIN
                                 [BlockListUIUtils
                                     showUnblockThreadActionSheet:thread
                                               fromViewController:strongSelf
-                                                 blockingManager:helper.blockingManager
-                                                 contactsManager:helper.contactsManager
                                                  completionBlock:^(BOOL isStillBlocked) {
                                                      if (!isStillBlocked) {
                                                          [strongSelf.selectThreadViewDelegate threadWasSelected:thread];
@@ -287,10 +299,9 @@ NS_ASSUME_NONNULL_BEGIN
                             if (isBlocked) {
                                 cell.accessoryMessage = MessageStrings.conversationIsBlocked;
                             }
-                            [cell configureWithRecipientAddress:signalAccount.recipientAddress];
+                            [cell configureWithRecipientAddressWithSneakyTransaction:signalAccount.recipientAddress];
                             return cell;
                         }
-                        customRowHeight:UITableViewAutomaticDimension
                         actionBlock:^{
                             [weakSelf signalAccountWasSelected:signalAccount];
                         }]];
@@ -325,8 +336,6 @@ NS_ASSUME_NONNULL_BEGIN
         __weak SelectThreadViewController *weakSelf = self;
         [BlockListUIUtils showUnblockSignalAccountActionSheet:signalAccount
                                            fromViewController:self
-                                              blockingManager:helper.blockingManager
-                                              contactsManager:helper.contactsManager
                                               completionBlock:^(BOOL isBlocked) {
                                                   if (!isBlocked) {
                                                       [weakSelf signalAccountWasSelected:signalAccount];
@@ -336,10 +345,10 @@ NS_ASSUME_NONNULL_BEGIN
     }
 
     __block TSThread *thread = nil;
-    [self.databaseStorage writeWithBlock:^(SDSAnyWriteTransaction *transaction) {
+    DatabaseStorageWrite(self.databaseStorage, ^(SDSAnyWriteTransaction *transaction) {
         thread = [TSContactThread getOrCreateThreadWithContactAddress:signalAccount.recipientAddress
                                                           transaction:transaction];
-    }];
+    });
     OWSAssertDebug(thread);
 
     [self.selectThreadViewDelegate threadWasSelected:thread];
@@ -351,9 +360,40 @@ NS_ASSUME_NONNULL_BEGIN
 {
     NSString *searchTerm = [[self.searchBar text] ows_stripped];
 
-    return [self.fullTextSearcher filterThreads:self.threadViewHelper.threads
-                                 withSearchText:searchTerm
-                                    transaction:transaction];
+    NSArray<TSThread *> *unfilteredThreads = [self.fullTextSearcher filterThreads:self.threadViewHelper.threads
+                                                                   withSearchText:searchTerm
+                                                                      transaction:transaction];
+    NSMutableArray<TSThread *> *threads = [NSMutableArray new];
+    for (TSThread *thread in unfilteredThreads) {
+        if (thread.canSendToThread) {
+            [threads addObject:thread];
+        }
+    }
+
+    NSArray<NSString *> *pinnedThreadIds = PinnedThreadManager.pinnedThreadIds;
+
+    return [threads sortedArrayUsingComparator:^NSComparisonResult(TSThread *lhs, TSThread *rhs) {
+        NSUInteger lhsIndex = [pinnedThreadIds indexOfObject:lhs.uniqueId];
+        NSUInteger rhsIndex = [pinnedThreadIds indexOfObject:rhs.uniqueId];
+
+        // Sort pinned threads to the top.
+        if (lhsIndex != NSNotFound && rhsIndex != NSNotFound) {
+            if (lhsIndex > rhsIndex) {
+                return NSOrderedDescending;
+            } else if (lhsIndex < rhsIndex) {
+                return NSOrderedAscending;
+            } else {
+                return NSOrderedSame;
+            }
+        } else if (lhsIndex != NSNotFound) {
+            return NSOrderedAscending;
+        } else if (rhsIndex != NSNotFound) {
+            return NSOrderedDescending;
+        }
+
+        // Don't re-order non-pinned threads.
+        return NSOrderedSame;
+    }];
 }
 
 - (NSArray<SignalAccount *> *)filteredSignalAccountsWithTransaction:(SDSAnyReadTransaction *)transaction
@@ -402,16 +442,11 @@ NS_ASSUME_NONNULL_BEGIN
     [self updateTableContents];
 }
 
-#pragma mark - ContactsViewHelperDelegate
+#pragma mark - ContactsViewHelperObserver
 
 - (void)contactsViewHelperDidUpdateContacts
 {
     [self updateTableContents];
-}
-
-- (BOOL)shouldHideLocalNumber
-{
-    return NO;
 }
 
 #pragma mark - FindByPhoneNumberDelegate

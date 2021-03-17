@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 import Foundation
@@ -29,7 +29,7 @@ public class IncomingGroupSyncJobQueue: NSObject, JobQueue {
     public override init() {
         super.init()
 
-        AppReadiness.runNowOrWhenAppDidBecomeReady {
+        AppReadiness.runNowOrWhenAppDidBecomeReadyAsync {
             self.setup()
         }
     }
@@ -116,7 +116,7 @@ public class IncomingGroupSyncOperation: OWSOperation, DurableOperation {
             self.reportSuccess()
         }.catch { error in
             self.reportError(withUndefinedRetry: error)
-        }.retainUntilComplete()
+        }
     }
 
     public override func didSucceed() {
@@ -155,8 +155,7 @@ public class IncomingGroupSyncOperation: OWSOperation, DurableOperation {
 
         switch attachment {
         case let attachmentPointer as TSAttachmentPointer:
-            return self.attachmentDownloads.downloadAttachmentPointer(attachmentPointer,
-                                                                      bypassPendingMessageRequest: true)
+            return self.attachmentDownloads.enqueueHeadlessDownloadPromise(attachmentPointer: attachmentPointer)
         case let attachmentStream as TSAttachmentStream:
             return Promise.value(attachmentStream)
         default:
@@ -180,7 +179,11 @@ public class IncomingGroupSyncOperation: OWSOperation, DurableOperation {
                             do {
                                 try self.process(groupDetails: nextGroup, transaction: transaction)
                             } catch {
-                                owsFailDebug("Error: \(error)")
+                                if case GroupsV2Error.groupDowngradeNotAllowed = error {
+                                    Logger.warn("Error: \(error)")
+                                } else {
+                                    owsFailDebug("Error: \(error)")
+                                }
                             }
                         }
                     }
@@ -198,17 +201,23 @@ public class IncomingGroupSyncOperation: OWSOperation, DurableOperation {
             owsFailDebug("Invalid group id.")
             return
         }
+
+        TSGroupThread.ensureGroupIdMapping(forGroupId: groupId, transaction: transaction)
+
         // groupUpdateSourceAddress is nil because we don't know
         // who made any changes.
         let groupUpdateSourceAddress: SignalServiceAddress? = nil
         // We only sync v1 groups via group sync messages.
-        let result = try GroupManager.upsertExistingGroupV1(groupId: groupId,
-                                                            name: groupDetails.name,
-                                                            avatarData: groupDetails.avatarData,
-                                                            members: groupDetails.memberAddresses,
-                                                            groupUpdateSourceAddress: groupUpdateSourceAddress,
-                                                            infoMessagePolicy: .never,
-                                                            transaction: transaction)
+
+        let disappearingMessageToken = DisappearingMessageToken.token(forProtoExpireTimer: groupDetails.expireTimer)
+        let result = try GroupManager.remoteUpsertExistingGroupV1(groupId: groupId,
+                                                                  name: groupDetails.name,
+                                                                  avatarData: groupDetails.avatarData,
+                                                                  members: groupDetails.memberAddresses,
+                                                                  disappearingMessageToken: disappearingMessageToken,
+                                                                  groupUpdateSourceAddress: groupUpdateSourceAddress,
+                                                                  infoMessagePolicy: .never,
+                                                                  transaction: transaction)
 
         let groupThread = result.groupThread
         let groupModel = groupThread.groupModel
@@ -230,7 +239,7 @@ public class IncomingGroupSyncOperation: OWSOperation, DurableOperation {
 
         if groupDetails.isBlocked {
             if !self.blockingManager.isGroupIdBlocked(groupDetails.groupId) {
-                self.blockingManager.addBlockedGroup(groupModel, wasLocallyInitiated: false, transaction: transaction)
+                self.blockingManager.addBlockedGroup(groupModel, blockMode: .remote, transaction: transaction)
             }
         } else {
             if self.blockingManager.isGroupIdBlocked(groupDetails.groupId) {
@@ -243,18 +252,12 @@ public class IncomingGroupSyncOperation: OWSOperation, DurableOperation {
             newThreads.append((threadId: groupThread.uniqueId, sortOrder: inboxSortOrder))
 
             if let isArchived = groupDetails.isArchived, isArchived == true {
-                groupThread.archiveThread(with: transaction)
+                groupThread.archiveThread(updateStorageService: false, transaction: transaction)
             }
         }
 
         if groupNeedsUpdate {
             groupThread.anyOverwritingUpdate(transaction: transaction)
         }
-
-        OWSDisappearingMessagesJob.shared().becomeConsistent(withDisappearingDuration: groupDetails.expireTimer,
-                                                             thread: groupThread,
-                                                             createdByRemoteRecipient: nil,
-                                                             createdInExistingGroup: !isNewThread,
-                                                             transaction: transaction)
     }
 }

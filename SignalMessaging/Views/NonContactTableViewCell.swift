@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2019 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 import Foundation
@@ -11,7 +11,8 @@ public class NonContactTableViewCell: UITableViewCell {
     private let headerLabel = UILabel()
     private let accessoryLabel = UILabel()
 
-    @objc var accessoryMessage: String?
+    @objc
+    public var accessoryMessage: String?
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
@@ -19,16 +20,16 @@ public class NonContactTableViewCell: UITableViewCell {
         OWSTableItem.configureCell(self)
 
         let stackView = UIStackView()
-        stackView.isLayoutMarginsRelativeArrangement = true
-        stackView.layoutMargins = UIEdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
-        stackView.spacing = 12
+        stackView.spacing = kContactCellAvatarTextMargin
         stackView.addArrangedSubview(iconView)
 
         contentView.addSubview(stackView)
-        stackView.autoPinEdgesToSuperviewEdges()
+        stackView.autoPinWidthToSuperviewMargins()
+        stackView.autoPinHeightToSuperview(withMargin: 7)
 
-        iconView.autoSetDimensions(to: CGSize(square: 48))
-        iconView.layer.cornerRadius = 24
+        let avatarSize = CGFloat(kSmallAvatarSize)
+        iconView.autoSetDimensions(to: CGSize(square: avatarSize))
+        iconView.layer.cornerRadius = avatarSize * 0.5
         iconView.clipsToBounds = true
 
         let labelStack = UIStackView()
@@ -38,11 +39,11 @@ public class NonContactTableViewCell: UITableViewCell {
         let topSpacer = UIView.vStretchingSpacer()
         labelStack.addArrangedSubview(topSpacer)
 
-        headerLabel.font = .ows_dynamicTypeBody
+        headerLabel.font = OWSTableItem.primaryLabelFont
         headerLabel.textColor = Theme.primaryTextColor
         labelStack.addArrangedSubview(headerLabel)
 
-        identifierLabel.font = UIFont.ows_dynamicTypeBody.ows_semibold()
+        identifierLabel.font = OWSTableItem.primaryLabelFont.ows_semibold
         identifierLabel.textColor = Theme.primaryTextColor
         labelStack.addArrangedSubview(identifierLabel)
 
@@ -50,7 +51,7 @@ public class NonContactTableViewCell: UITableViewCell {
         labelStack.addArrangedSubview(bottomSpacer)
         bottomSpacer.autoMatch(.height, to: .height, of: topSpacer)
 
-        accessoryLabel.font = .ows_semiboldFont(withSize: 13)
+        accessoryLabel.font = OWSTableItem.accessoryLabelFont.ows_semibold
         accessoryLabel.textColor = Theme.middleGrayColor
         accessoryLabel.textAlignment = .right
         accessoryLabel.isHidden = true

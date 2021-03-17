@@ -6,6 +6,13 @@ import Foundation
 import PromiseKit
 import SignalMetadataKit
 
+@objc
+public enum SignalServiceError: Int, Error {
+    case obsoleteLinkedDevice
+}
+
+// MARK: -
+
 public protocol SignalServiceClient {
     func requestPreauthChallenge(recipientId: String, pushToken: String) -> Promise<Void>
     func requestVerificationCode(recipientId: String, preauthChallenge: String?, captchaToken: String?, transport: TSVerificationTransport) -> Promise<Void>
@@ -13,16 +20,25 @@ public protocol SignalServiceClient {
     func getAvailablePreKeys() -> Promise<Int>
     func registerPreKeys(identityKey: IdentityKey, signedPreKeyRecord: SignedPreKeyRecord, preKeyRecords: [PreKeyRecord]) -> Promise<Void>
     func setCurrentSignedPreKey(_ signedPreKey: SignedPreKeyRecord) -> Promise<Void>
-    func requestUDSenderCertificate(includeUuid: Bool) -> Promise<Data>
+    func requestUDSenderCertificate(uuidOnly: Bool) -> Promise<Data>
     func updatePrimaryDeviceAccountAttributes() -> Promise<Void>
     func getAccountUuid() -> Promise<UUID>
     func requestStorageAuth() -> Promise<(username: String, password: String)>
-    func getRemoteConfig() -> Promise<[String: Bool]>
+    func getRemoteConfig() -> Promise<[String: RemoteConfigItem]>
 
     // MARK: - Secondary Devices
 
-    func updateDeviceCapabilities() -> Promise<Void>
+    func updateSecondaryDeviceCapabilities() -> Promise<Void>
 }
+
+// MARK: -
+
+public enum RemoteConfigItem {
+    case isEnabled(isEnabled: Bool)
+    case value(value: AnyObject)
+}
+
+// MARK: -
 
 /// Based on libsignal-service-java's PushServiceSocket class
 @objc
@@ -86,8 +102,8 @@ public class SignalServiceRestClient: NSObject, SignalServiceClient {
         return networkManager.makePromise(request: request).asVoid()
     }
 
-    public func requestUDSenderCertificate(includeUuid: Bool) -> Promise<Data> {
-        let request = OWSRequestFactory.udSenderCertificateRequest(includeUuid: includeUuid)
+    public func requestUDSenderCertificate(uuidOnly: Bool) -> Promise<Data> {
+        let request = OWSRequestFactory.udSenderCertificateRequest(uuidOnly: uuidOnly)
         return firstly {
             self.networkManager.makePromise(request: request)
         }.map { _, responseObject in
@@ -150,21 +166,35 @@ public class SignalServiceRestClient: NSObject, SignalServiceClient {
                                                                      authKey: authKey,
                                                                      encryptedDeviceName: encryptedDeviceName)
 
-        return networkManager.makePromise(request: request).map { _, responseObject in
+        return firstly {
+            networkManager.makePromise(request: request)
+        }.map(on: .global()) { _, responseObject in
             guard let parser = ParamParser(responseObject: responseObject) else {
                 throw OWSErrorMakeUnableToProcessServerResponseError()
             }
 
             let deviceId: UInt32 = try parser.required(key: "deviceId")
             return deviceId
+        }.recover { error -> Promise<UInt32> in
+            if let statusCode = error.httpStatusCode,
+                statusCode == 409 {
+                // Convert 409 errors into .obsoleteLinkedDevice
+                // so that they can be explicitly handled.
+
+                throw SignalServiceError.obsoleteLinkedDevice
+            } else {
+                // Re-throw.
+                throw error
+            }
         }
     }
 
     // yields a map of ["feature_name": isEnabled]
-    public func getRemoteConfig() -> Promise<[String: Bool]> {
+    public func getRemoteConfig() -> Promise<[String: RemoteConfigItem]> {
         let request = OWSRequestFactory.getRemoteConfigRequest()
 
         return networkManager.makePromise(request: request).map { _, responseObject in
+
             guard let parser = ParamParser(responseObject: responseObject) else {
                 throw OWSErrorMakeUnableToProcessServerResponseError()
             }
@@ -179,7 +209,12 @@ public class SignalServiceRestClient: NSObject, SignalServiceClient {
 
                 let name: String = try itemParser.required(key: "name")
                 let isEnabled: Bool = try itemParser.required(key: "enabled")
-                accum[name] = isEnabled
+
+                if let value: AnyObject = try itemParser.optional(key: "value") {
+                    accum[name] = RemoteConfigItem.value(value: value)
+                } else {
+                    accum[name] = RemoteConfigItem.isEnabled(isEnabled: isEnabled)
+                }
 
                 return accum
             }
@@ -188,7 +223,7 @@ public class SignalServiceRestClient: NSObject, SignalServiceClient {
 
     // MARK: - Secondary Devices
 
-    public func updateDeviceCapabilities() -> Promise<Void> {
+    public func updateSecondaryDeviceCapabilities() -> Promise<Void> {
         let request = OWSRequestFactory.updateSecondaryDeviceCapabilitiesRequest()
         return self.networkManager.makePromise(request: request).asVoid()
     }

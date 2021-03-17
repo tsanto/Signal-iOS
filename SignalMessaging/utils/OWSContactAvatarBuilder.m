@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import "OWSContactAvatarBuilder.h"
@@ -23,6 +23,18 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 @implementation OWSContactAvatarBuilder
+
+#pragma mark - Dependencies
+
+- (OWSContactsManager *)contactsManager
+{
+    return (OWSContactsManager *)SSKEnvironment.shared.contactsManager;
+}
+
+- (SDSDatabaseStorage *)databaseStorage
+{
+    return SDSDatabaseStorage.shared;
+}
 
 #pragma mark - Initializers
 
@@ -51,8 +63,21 @@ NS_ASSUME_NONNULL_BEGIN
                        diameter:(NSUInteger)diameter
 {
     // Components for avatar initials.
-    NSPersonNameComponents *_Nullable nameComponents =
-        [OWSContactAvatarBuilder.contactsManager nameComponentsForAddress:address];
+    __block NSPersonNameComponents *_Nullable nameComponents;
+    [self.databaseStorage uiReadWithBlock:^(SDSAnyReadTransaction *transaction) {
+        nameComponents = [self.contactsManager nameComponentsForAddress:address transaction:transaction];
+    }];
+    return [self initWithAddress:address nameComponents:nameComponents colorName:colorName diameter:diameter];
+}
+
+- (instancetype)initWithAddress:(SignalServiceAddress *)address
+                      colorName:(ConversationColorName)colorName
+                       diameter:(NSUInteger)diameter
+                    transaction:(SDSAnyReadTransaction *)transaction
+{
+    // Components for avatar initials.
+    NSPersonNameComponents *_Nullable nameComponents = [self.contactsManager nameComponentsForAddress:address
+                                                                                          transaction:transaction];
     return [self initWithAddress:address nameComponents:nameComponents colorName:colorName diameter:diameter];
 }
 
@@ -69,9 +94,35 @@ NS_ASSUME_NONNULL_BEGIN
     OWSAssertDebug(diameter > 0);
     OWSAssertDebug(TSAccountManager.localAddress.isValid);
 
+    __block OWSContactAvatarBuilder *instance;
+    [self.databaseStorage uiReadWithBlock:^(SDSAnyReadTransaction *transaction) {
+        instance = [self initWithAddress:TSAccountManager.localAddress
+                               colorName:ConversationColorNameDefault
+                                diameter:diameter
+                             transaction:transaction];
+    }];
+    return instance;
+}
+
+- (instancetype)initForLocalUserWithDiameter:(NSUInteger)diameter transaction:(SDSAnyReadTransaction *)transaction
+{
+    OWSAssertDebug(diameter > 0);
+    OWSAssertDebug(TSAccountManager.localAddress.isValid);
+
     return [self initWithAddress:TSAccountManager.localAddress
                        colorName:ConversationColorNameDefault
-                        diameter:diameter];
+                        diameter:diameter
+                     transaction:transaction];
+}
+
++ (nullable UIImage *)buildImageForAddress:(SignalServiceAddress *)address
+                                  diameter:(NSUInteger)diameter
+                               transaction:(SDSAnyReadTransaction *)transaction
+{
+    ConversationColorName color = [self.contactsManager conversationColorNameForAddress:address
+                                                                            transaction:transaction];
+    return [[[self alloc] initWithAddress:address colorName:color diameter:diameter
+                              transaction:transaction] buildWithTransaction:transaction];
 }
 
 #pragma mark - Dependencies
@@ -90,27 +141,46 @@ NS_ASSUME_NONNULL_BEGIN
     }
 
     if (self.address.isLocalAddress) {
-        NSString *noteToSelfCacheKey = [NSString stringWithFormat:@"%@:note-to-self", self.cacheKey];
-        UIImage *_Nullable cachedAvatar =
-            [OWSContactAvatarBuilder.contactsManager.avatarCache imageForKey:noteToSelfCacheKey
-                                                                    diameter:(CGFloat)self.diameter];
-        if (cachedAvatar) {
-            return cachedAvatar;
-        }
-
-        UIImage *image = [self noteToSelfImageWithConversationColorName:self.colorName diameter:(CGFloat)self.diameter];
-        if (!image) {
-            OWSFailDebug(@"Could not generate avatar.");
-            return nil;
-        }
-
-        [OWSContactAvatarBuilder.contactsManager.avatarCache setImage:image
-                                                               forKey:noteToSelfCacheKey
-                                                             diameter:self.diameter];
-        return image;
+        return self.buildImageForLocalUser;
     }
 
     return [OWSContactAvatarBuilder.contactsManager imageForAddressWithSneakyTransaction:self.address];
+}
+
+- (nullable UIImage *)buildSavedImageWithTransaction:(SDSAnyReadTransaction *)transaction
+{
+    if (!self.address.isValid) {
+        return nil;
+    }
+
+    if (self.address.isLocalAddress) {
+        return self.buildImageForLocalUser;
+    }
+
+    return [OWSContactAvatarBuilder.contactsManager imageForAddress:self.address transaction:transaction];
+}
+
+- (nullable UIImage *)buildImageForLocalUser
+{
+    OWSCAssertDebug(self.address.isLocalAddress);
+    NSString *noteToSelfCacheKey = [NSString stringWithFormat:@"%@:note-to-self", self.cacheKey];
+    UIImage *_Nullable cachedAvatar =
+        [OWSContactAvatarBuilder.contactsManager getImageFromAvatarCacheWithKey:noteToSelfCacheKey
+                                                                       diameter:(CGFloat)self.diameter];
+    if (cachedAvatar) {
+        return cachedAvatar;
+    }
+
+    UIImage *image = [self noteToSelfImageWithConversationColorName:self.colorName diameter:(CGFloat)self.diameter];
+    if (!image) {
+        OWSFailDebug(@"Could not generate avatar.");
+        return nil;
+    }
+
+    [OWSContactAvatarBuilder.contactsManager setImageForAvatarCache:image
+                                                             forKey:noteToSelfCacheKey
+                                                           diameter:self.diameter];
+    return image;
 }
 
 - (id)cacheKey
@@ -145,7 +215,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable UIImage *)buildDefaultImage
 {
     UIImage *_Nullable cachedAvatar =
-        [OWSContactAvatarBuilder.contactsManager.avatarCache imageForKey:self.cacheKey diameter:(CGFloat)self.diameter];
+        [OWSContactAvatarBuilder.contactsManager getImageFromAvatarCacheWithKey:self.cacheKey
+                                                                       diameter:(CGFloat)self.diameter];
     if (cachedAvatar) {
         return cachedAvatar;
     }
@@ -170,8 +241,10 @@ NS_ASSUME_NONNULL_BEGIN
         CGFloat scaling = (self.diameter / (CGFloat)kStandardAvatarSize) * (28 / assetWidthPixels);
 
         CGSize iconSize = CGSizeScale(icon.size, scaling);
-        image =
-            [OWSAvatarBuilder avatarImageWithIcon:icon iconSize:iconSize backgroundColor:color diameter:self.diameter];
+        image = [OWSAvatarBuilder avatarImageWithIcon:icon
+                                             iconSize:iconSize
+                                      backgroundColor:color
+                                             diameter:self.diameter];
     } else {
         image = [OWSAvatarBuilder avatarImageWithInitials:self.contactInitials
                                           backgroundColor:color
@@ -183,7 +256,7 @@ NS_ASSUME_NONNULL_BEGIN
         return nil;
     }
 
-    [OWSContactAvatarBuilder.contactsManager.avatarCache setImage:image forKey:self.cacheKey diameter:self.diameter];
+    [OWSContactAvatarBuilder.contactsManager setImageForAvatarCache:image forKey:self.cacheKey diameter:self.diameter];
     return image;
 }
 

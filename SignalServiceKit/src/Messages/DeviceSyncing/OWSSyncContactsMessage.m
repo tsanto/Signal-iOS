@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2019 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import "OWSSyncContactsMessage.h"
@@ -23,17 +23,37 @@ NS_ASSUME_NONNULL_BEGIN
 @interface OWSSyncContactsMessage ()
 
 @property (nonatomic, readonly) NSArray<SignalAccount *> *signalAccounts;
-@property (nonatomic, readonly) OWSIdentityManager *identityManager;
-@property (nonatomic, readonly) id<ProfileManagerProtocol> profileManager;
 
 @end
 
 @implementation OWSSyncContactsMessage
 
+#pragma mark - Dependencies
+
+- (id<ContactsManagerProtocol>)contactsManager
+{
+    return SSKEnvironment.shared.contactsManager;
+}
+
+- (TSAccountManager *)tsAccountManager
+{
+    return TSAccountManager.shared;
+}
+
+- (OWSIdentityManager *)identityManager
+{
+    return SSKEnvironment.shared.identityManager;
+}
+
+- (id<ProfileManagerProtocol>)profileManager
+{
+    return SSKEnvironment.shared.profileManager;
+}
+
+#pragma mark -
+
 - (instancetype)initWithThread:(TSThread *)thread
                 signalAccounts:(NSArray<SignalAccount *> *)signalAccounts
-               identityManager:(OWSIdentityManager *)identityManager
-                profileManager:(id<ProfileManagerProtocol>)profileManager
 {
     self = [super initWithThread:thread];
     if (!self) {
@@ -41,8 +61,6 @@ NS_ASSUME_NONNULL_BEGIN
     }
 
     _signalAccounts = signalAccounts;
-    _identityManager = identityManager;
-    _profileManager = profileManager;
 
     return self;
 }
@@ -51,18 +69,6 @@ NS_ASSUME_NONNULL_BEGIN
 {
     return [super initWithCoder:coder];
 }
-
-#pragma mark - Dependencies
-
-- (id<ContactsManagerProtocol>)contactsManager {
-    return SSKEnvironment.shared.contactsManager;
-}
-
-- (TSAccountManager *)tsAccountManager {
-    return TSAccountManager.sharedInstance;
-}
-
-#pragma mark -
 
 - (nullable SSKProtoSyncMessageBuilder *)syncMessageBuilderWithTransaction:(SDSAnyReadTransaction *)transaction
 {
@@ -104,9 +110,11 @@ NS_ASSUME_NONNULL_BEGIN
             hasLocalAddress |= signalAccount.recipientAddress.isLocalAddress;
         }
         if (!hasLocalAddress) {
-            SignalAccount *signalAccount = [[SignalAccount alloc] initWithSignalServiceAddress:localAddress];
             // OWSContactsOutputStream requires all signalAccount to have a contact.
-            signalAccount.contact = [[Contact alloc] initWithSystemContact:[CNContact new]];
+            Contact *contact = [[Contact alloc] initWithSystemContact:[CNContact new]];
+            SignalAccount *signalAccount = [[SignalAccount alloc] initWithSignalServiceAddress:localAddress
+                                                                                       contact:contact
+                                                                      multipleAccountLabelText:nil];
             [signalAccounts addObject:signalAccount];
         }
     }
@@ -121,7 +129,7 @@ NS_ASSUME_NONNULL_BEGIN
 
     for (SignalAccount *signalAccount in signalAccounts) {
         OWSRecipientIdentity *_Nullable recipientIdentity =
-            [self.identityManager recipientIdentityForAddress:signalAccount.recipientAddress];
+            [self.identityManager recipientIdentityForAddress:signalAccount.recipientAddress transaction:transaction];
         NSData *_Nullable profileKeyData =
             [self.profileManager profileKeyDataForAddress:signalAccount.recipientAddress transaction:transaction];
 

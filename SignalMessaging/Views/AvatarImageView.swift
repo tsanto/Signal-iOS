@@ -5,7 +5,7 @@
 import UIKit
 
 @objc
-public class AvatarImageView: UIImageView {
+open class AvatarImageView: UIImageView {
 
     public init() {
         super.init(frame: .zero)
@@ -22,7 +22,7 @@ public class AvatarImageView: UIImageView {
         self.configureView()
     }
 
-    override init(image: UIImage?) {
+    public override init(image: UIImage?) {
         super.init(image: image)
         self.configureView()
     }
@@ -47,17 +47,8 @@ public class AvatarImageView: UIImageView {
 @objc
 public class ConversationAvatarImageView: AvatarImageView {
 
-    // MARK: - Dependencies
-
-    private var databaseStorage: SDSDatabaseStorage {
-        return SDSDatabaseStorage.shared
-    }
-
-    // MARK: -
-
-    let thread: TSThread
+    var thread: TSThread
     let diameter: UInt
-    let contactsManager: OWSContactsManager
 
     // nil if group avatar
     let recipientAddress: SignalServiceAddress?
@@ -65,10 +56,9 @@ public class ConversationAvatarImageView: AvatarImageView {
     // nil if contact avatar
     let groupThreadId: String?
 
-    required public init(thread: TSThread, diameter: UInt, contactsManager: OWSContactsManager) {
+    required public init(thread: TSThread, diameter: UInt) {
         self.thread = thread
         self.diameter = diameter
-        self.contactsManager = contactsManager
 
         switch thread {
         case let contactThread as TSContactThread:
@@ -78,7 +68,7 @@ public class ConversationAvatarImageView: AvatarImageView {
             self.recipientAddress = nil
             self.groupThreadId = groupThread.uniqueId
         default:
-            owsFailDebug("unexpected thread type: \(thread)")
+            owsFailDebug("unexpected thread type: \(thread.uniqueId)")
             self.recipientAddress = nil
             self.groupThreadId = nil
         }
@@ -98,7 +88,7 @@ public class ConversationAvatarImageView: AvatarImageView {
         NotificationCenter.default.addObserver(self, selector: #selector(themeDidChange), name: .ThemeDidChange, object: nil)
 
         // TODO group avatar changed
-        self.updateImage()
+        self.updateImageWithSneakyTransaction()
     }
 
     required public init?(coder aDecoder: NSCoder) {
@@ -106,7 +96,7 @@ public class ConversationAvatarImageView: AvatarImageView {
     }
 
     @objc func themeDidChange() {
-        updateImage()
+        updateImageWithSneakyTransaction()
     }
 
     @objc func handleSignalAccountsChanged(notification: Notification) {
@@ -115,7 +105,7 @@ public class ConversationAvatarImageView: AvatarImageView {
         // PERF: It would be nice if we could do this only if *this* user's SignalAccount changed,
         // but currently this is only a course grained notification.
 
-        self.updateImage()
+        self.updateImageWithSneakyTransaction()
     }
 
     @objc func handleOtherUsersProfileChanged(notification: Notification) {
@@ -137,7 +127,7 @@ public class ConversationAvatarImageView: AvatarImageView {
             return
         }
 
-        self.updateImage()
+        self.updateImageWithSneakyTransaction()
     }
 
     @objc func handleGroupAvatarChanged(notification: Notification) {
@@ -159,17 +149,29 @@ public class ConversationAvatarImageView: AvatarImageView {
             return
         }
 
-        databaseStorage.read { transaction in
-            self.thread.anyReload(transaction: transaction)
+        guard let latestThread = (databaseStorage.read { transaction in
+            TSThread.anyFetch(uniqueId: self.thread.uniqueId, transaction: transaction)
+        }) else {
+            owsFailDebug("Missing thread.")
+            return
         }
+        self.thread = latestThread
 
-        self.updateImage()
+        self.updateImageWithSneakyTransaction()
     }
 
-    public func updateImage() {
+    public func updateImageWithSneakyTransaction() {
+        databaseStorage.read { transaction in
+            self.updateImage(transaction: transaction)
+        }
+    }
+
+    public func updateImage(transaction: SDSAnyReadTransaction) {
         Logger.debug("updateImage")
 
-        self.image = OWSAvatarBuilder.buildImage(thread: thread, diameter: diameter)
+        self.image = OWSAvatarBuilder.buildImage(thread: thread,
+                                                 diameter: diameter,
+                                                 transaction: transaction)
     }
 }
 

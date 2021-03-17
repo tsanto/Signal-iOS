@@ -1,9 +1,11 @@
 //
-//  Copyright (c) 2019 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import <SignalServiceKit/SSKEnvironment.h>
 
+@class BroadcastMediaMessageJobQueue;
+@class ContactsViewHelper;
 @class LaunchJobs;
 @class OWSAudioSession;
 @class OWSContactsManager;
@@ -25,6 +27,7 @@
 // TODO: Rename to SMGEnvironment?
 @interface Environment : NSObject
 
++ (instancetype)new NS_UNAVAILABLE;
 - (instancetype)init NS_UNAVAILABLE;
 
 - (instancetype)initWithAudioSession:(OWSAudioSession *)audioSession
@@ -34,7 +37,9 @@
                          preferences:(OWSPreferences *)preferences
           proximityMonitoringManager:(id<OWSProximityMonitoringManager>)proximityMonitoringManager
                               sounds:(OWSSounds *)sounds
-                       windowManager:(OWSWindowManager *)windowManager;
+                       windowManager:(OWSWindowManager *)windowManager
+                  contactsViewHelper:(ContactsViewHelper *)contactsViewHelper
+       broadcastMediaMessageJobQueue:(BroadcastMediaMessageJobQueue *)broadcastMediaMessageJobQueue;
 
 @property (nonatomic, readonly) OWSAudioSession *audioSession;
 @property (nonatomic, readonly) OWSContactsManager *contactsManager;
@@ -45,6 +50,8 @@
 @property (nonatomic, readonly) OWSPreferences *preferences;
 @property (nonatomic, readonly) OWSSounds *sounds;
 @property (nonatomic, readonly) OWSWindowManager *windowManager;
+@property (nonatomic, readonly) ContactsViewHelper *contactsViewHelper;
+@property (nonatomic, readonly) BroadcastMediaMessageJobQueue *broadcastMediaMessageJobQueue;
 
 @property (class, nonatomic) Environment *shared;
 

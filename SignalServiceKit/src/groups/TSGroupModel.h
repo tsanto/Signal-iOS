@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import "ContactsManagerProtocol.h"
@@ -19,10 +19,15 @@ typedef NS_CLOSED_ENUM(uint32_t, GroupsVersion) { GroupsVersionV1 = 0, GroupsVer
 typedef NS_CLOSED_ENUM(
     NSUInteger, TSGroupMemberRole) { TSGroupMemberRole_Normal = 0, TSGroupMemberRole_Administrator = 1 };
 
-// NOTE: This class is tightly coupled to GroupManager.
+typedef NS_CLOSED_ENUM(NSUInteger, TSGroupModelComparisonMode) {
+    TSGroupModelComparisonMode_CompareAll,
+    TSGroupModelComparisonMode_UserFacingOnly,
+};
+
+// NOTE: This class is tightly coupled to TSGroupModelBuilder.
 //       If you modify this class - especially if you
 //       add any new properties - make sure to update
-//       GroupManager.buildGroupModel().
+//       TSGroupModelBuilder.
 @interface TSGroupModel : MTLModel
 
 // groupMembers includes administrators and normal members.
@@ -31,7 +36,7 @@ typedef NS_CLOSED_ENUM(
 @property (nonatomic, readonly) NSArray<SignalServiceAddress *> *nonLocalGroupMembers;
 @property (nonatomic, readonly, nullable) NSString *groupName;
 @property (nonatomic, readonly) NSData *groupId;
-@property (nonatomic, nullable) SignalServiceAddress *addedByAddress;
+@property (nonatomic, readonly, nullable) SignalServiceAddress *addedByAddress;
 
 #if TARGET_OS_IOS
 @property (nonatomic, readonly, nullable) UIImage *groupAvatarImage;
@@ -41,28 +46,21 @@ typedef NS_CLOSED_ENUM(
 @property (nonatomic, readonly) GroupsVersion groupsVersion;
 @property (nonatomic, readonly) GroupMembership *groupMembership;
 
-// These properties only apply if groupsVersion == GroupsVersionV2.
-@property (nonatomic, readonly) GroupAccess *groupAccess;
-@property (nonatomic, readonly) uint32_t groupV2Revision;
-@property (nonatomic, readonly, nullable) NSData *groupSecretParamsData;
-
-// GroupsV2 TODO: This should be done via GroupManager.
-- (void)setGroupAvatarDataWithImage:(nullable UIImage *)image;
-
++ (BOOL)isValidGroupAvatarData:(nullable NSData *)imageData;
 + (nullable NSData *)dataForGroupAvatar:(nullable UIImage *)image;
 
-- (instancetype)init NS_UNAVAILABLE;
 + (instancetype)new NS_UNAVAILABLE;
-
+- (instancetype)init NS_UNAVAILABLE;
 - (nullable instancetype)initWithCoder:(NSCoder *)coder NS_DESIGNATED_INITIALIZER;
 
 - (instancetype)initWithGroupId:(NSData *)groupId
                            name:(nullable NSString *)name
                      avatarData:(nullable NSData *)avatarData
-                        members:(NSArray<SignalServiceAddress *> *)members NS_DESIGNATED_INITIALIZER;
+                        members:(NSArray<SignalServiceAddress *> *)members
+                 addedByAddress:(nullable SignalServiceAddress *)addedByAddress NS_DESIGNATED_INITIALIZER;
 
 - (BOOL)isEqual:(id)other;
-- (BOOL)isEqualToGroupModel:(TSGroupModel *)model;
+- (BOOL)isEqualToGroupModel:(TSGroupModel *)model comparisonMode:(TSGroupModelComparisonMode)comparisonMode;
 #endif
 
 @property (nonatomic, readonly) NSString *groupNameOrDefault;

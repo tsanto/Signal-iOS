@@ -9,6 +9,7 @@
 #import <SignalServiceKit/SSKEnvironment.h>
 #import <SignalServiceKit/SignalServiceKit-Swift.h>
 #import <SignalServiceKit/StorageCoordinator.h>
+#import <SignalServiceKit/TSThread.h>
 #import <YapDatabase/YapDatabaseTransaction.h>
 
 NS_ASSUME_NONNULL_BEGIN
@@ -48,10 +49,16 @@ NSString *const OWSPreferencesKey_IsGrdbReadyForAppExtensions = @"IsGrdbReadyFor
 NSString *const OWSPreferencesKey_IsAudibleErrorLoggingEnabled = @"IsAudibleErrorLoggingEnabled";
 NSString *const OWSPreferencesKeySystemCallLogEnabled = @"OWSPreferencesKeySystemCallLogEnabled";
 NSString *const OWSPreferencesKeyWasViewOnceTooltipShown = @"OWSPreferencesKeyWasViewOnceTooltipShown";
+NSString *const OWSPreferencesKeyWasDeleteForEveryoneConfirmationShown
+    = @"OWSPreferencesKeyWasDeleteForEveryoneConfirmationShown";
+NSString *const OWSPreferencesKeyWasBlurTooltipShown = @"OWSPreferencesKeyWasBlurTooltipShown";
+NSString *const OWSPreferencesKeyWasGroupCallTooltipShown = @"OWSPreferencesKeyWasGroupCallTooltipShown";
+NSString *const OWSPreferencesKeyWasGroupCallTooltipShownCount = @"OWSPreferencesKeyWasGroupCallTooltipShownCount";
 
 @interface OWSPreferences ()
 
 @property (atomic, nullable) NSNumber *notificationPreviewTypeCache;
+@property (atomic, nullable) NSNumber *mentionNotificationsEnabledCache;
 
 @end
 
@@ -103,9 +110,9 @@ NSString *const OWSPreferencesKeyWasViewOnceTooltipShown = @"OWSPreferencesKeyWa
 
 - (void)removeValueForKey:(NSString *)key
 {
-    [self.databaseStorage writeWithBlock:^(SDSAnyWriteTransaction *transaction) {
+    DatabaseStorageWrite(self.databaseStorage, ^(SDSAnyWriteTransaction *transaction) {
         [self.keyValueStore removeValueForKey:key transaction:transaction];
-    }];
+    });
 }
 
 - (BOOL)boolForKey:(NSString *)key defaultValue:(BOOL)defaultValue
@@ -119,9 +126,9 @@ NSString *const OWSPreferencesKeyWasViewOnceTooltipShown = @"OWSPreferencesKeyWa
 
 - (void)setBool:(BOOL)value forKey:(NSString *)key
 {
-    [self.databaseStorage writeWithBlock:^(SDSAnyWriteTransaction *transaction) {
+    DatabaseStorageWrite(self.databaseStorage, ^(SDSAnyWriteTransaction *transaction) {
         [self.keyValueStore setBool:value key:key transaction:transaction];
-    }];
+    });
 }
 
 - (NSUInteger)uintForKey:(NSString *)key defaultValue:(NSUInteger)defaultValue
@@ -135,9 +142,9 @@ NSString *const OWSPreferencesKeyWasViewOnceTooltipShown = @"OWSPreferencesKeyWa
 
 - (void)setUInt:(NSUInteger)value forKey:(NSString *)key
 {
-    [self.databaseStorage writeWithBlock:^(SDSAnyWriteTransaction *transaction) {
+    DatabaseStorageWrite(self.databaseStorage, ^(SDSAnyWriteTransaction *transaction) {
         [self.keyValueStore setUInt:value key:key transaction:transaction];
-    }];
+    });
 }
 
 - (nullable NSDate *)dateForKey:(NSString *)key
@@ -151,9 +158,9 @@ NSString *const OWSPreferencesKeyWasViewOnceTooltipShown = @"OWSPreferencesKeyWa
 
 - (void)setDate:(NSDate *)value forKey:(NSString *)key
 {
-    [self.databaseStorage writeWithBlock:^(SDSAnyWriteTransaction *transaction) {
+    DatabaseStorageWrite(self.databaseStorage, ^(SDSAnyWriteTransaction *transaction) {
         [self.keyValueStore setDate:value key:key transaction:transaction];
-    }];
+    });
 }
 
 - (nullable NSString *)stringForKey:(NSString *)key
@@ -167,9 +174,9 @@ NSString *const OWSPreferencesKeyWasViewOnceTooltipShown = @"OWSPreferencesKeyWa
 
 - (void)setString:(NSString *)value forKey:(NSString *)key
 {
-    [self.databaseStorage writeWithBlock:^(SDSAnyWriteTransaction *transaction) {
+    DatabaseStorageWrite(self.databaseStorage, ^(SDSAnyWriteTransaction *transaction) {
         [self.keyValueStore setString:value key:key transaction:transaction];
-    }];
+    });
 }
 
 #pragma mark - Specific Preferences
@@ -242,7 +249,7 @@ NSString *const OWSPreferencesKeyWasViewOnceTooltipShown = @"OWSPreferencesKeyWa
 
 - (BOOL)screenSecurityIsEnabled
 {
-    return [self boolForKey:OWSPreferencesKeyScreenSecurity defaultValue:YES];
+    return [self boolForKey:OWSPreferencesKeyScreenSecurity defaultValue:NO];
 }
 
 - (void)setScreenSecurity:(BOOL)value
@@ -308,11 +315,19 @@ NSString *const OWSPreferencesKeyWasViewOnceTooltipShown = @"OWSPreferencesKeyWa
     return [self boolForKey:OWSPreferencesKeyShouldShowUnidentifiedDeliveryIndicators defaultValue:NO];
 }
 
+- (BOOL)shouldShowUnidentifiedDeliveryIndicatorsWithTransaction:(SDSAnyReadTransaction *)transaction
+{
+    return [self.keyValueStore getBool:OWSPreferencesKeyShouldShowUnidentifiedDeliveryIndicators
+                          defaultValue:NO
+                           transaction:transaction];
+}
+
 - (void)setShouldShowUnidentifiedDeliveryIndicatorsAndSendSyncMessage:(BOOL)value
 {
     [self setBool:value forKey:OWSPreferencesKeyShouldShowUnidentifiedDeliveryIndicators];
 
     [SSKEnvironment.shared.syncManager sendConfigurationSyncMessage];
+    [SSKEnvironment.shared.storageServiceManager recordPendingLocalAccountUpdates];
 }
 
 - (void)setShouldShowUnidentifiedDeliveryIndicators:(BOOL)value transaction:(SDSAnyWriteTransaction *)transaction
@@ -338,25 +353,11 @@ NSString *const OWSPreferencesKeyWasViewOnceTooltipShown = @"OWSPreferencesKeyWa
 
 - (BOOL)isSystemCallLogEnabled
 {
-    if (@available(iOS 11, *)) {
-        // do nothing
-    } else {
-        OWSFailDebug(@"Call Logging can only be configured on iOS11+");
-        return NO;
-    }
-
     return [self boolForKey:OWSPreferencesKeySystemCallLogEnabled defaultValue:YES];
 }
 
 - (void)setIsSystemCallLogEnabled:(BOOL)value
 {
-    if (@available(iOS 11, *)) {
-        // do nothing
-    } else {
-        OWSFailDebug(@"Call Logging can only be configured on iOS11+");
-        return;
-    }
-
     [self setBool:value forKey:OWSPreferencesKeySystemCallLogEnabled];
 }
 
@@ -406,67 +407,6 @@ NSString *const OWSPreferencesKeyWasViewOnceTooltipShown = @"OWSPreferencesKeyWa
     [[NSNotificationCenter defaultCenter] postNotificationNameAsync:OWSPreferencesCallLoggingDidChangeNotification object:nil];
 }
 
-- (BOOL)isCallKitEnabled
-{
-    if (@available(iOS 11, *)) {
-        OWSFailDebug(@"CallKit is always enabled for iOS11+");
-        return YES;
-    }
-
-    return [self boolForKey:OWSPreferencesKeyCallKitEnabled defaultValue:YES];
-}
-
-- (void)setIsCallKitEnabled:(BOOL)value
-{
-    if (@available(iOS 11, *)) {
-        OWSFailDebug(@"CallKit is always enabled for iOS11+");
-        return;
-    }
-
-    [self setBool:value forKey:OWSPreferencesKeyCallKitEnabled];
-    // Rev callUIAdaptee to get new setting
-}
-
-- (BOOL)isCallKitEnabledSet
-{
-    if (@available(iOS 11, *)) {
-        OWSFailDebug(@"CallKit is always enabled for iOS11+");
-        return NO;
-    }
-
-    return [self hasValueForKey:OWSPreferencesKeyCallKitEnabled];
-}
-
-- (BOOL)isCallKitPrivacyEnabled
-{
-    if (@available(iOS 11, *)) {
-        OWSFailDebug(@"CallKit privacy is irrelevant for iOS11+");
-        return NO;
-    }
-
-    return [self boolForKey:OWSPreferencesKeyCallKitPrivacyEnabled defaultValue:YES];
-}
-
-- (void)setIsCallKitPrivacyEnabled:(BOOL)value
-{
-    if (@available(iOS 11, *)) {
-        OWSFailDebug(@"CallKit privacy is irrelevant for iOS11+");
-        return;
-    }
-
-    [self setBool:value forKey:OWSPreferencesKeyCallKitPrivacyEnabled];
-}
-
-- (BOOL)isCallKitPrivacySet
-{
-    if (@available(iOS 11, *)) {
-        OWSFailDebug(@"CallKit privacy is irrelevant for iOS11+");
-        return NO;
-    }
-
-    return [self hasValueForKey:OWSPreferencesKeyCallKitPrivacyEnabled];
-}
-
 - (BOOL)wasViewOnceTooltipShown
 {
     return [self boolForKey:OWSPreferencesKeyWasViewOnceTooltipShown defaultValue:NO];
@@ -475,6 +415,49 @@ NSString *const OWSPreferencesKeyWasViewOnceTooltipShown = @"OWSPreferencesKeyWa
 - (void)setWasViewOnceTooltipShown
 {
     [self setBool:YES forKey:OWSPreferencesKeyWasViewOnceTooltipShown];
+}
+
+- (BOOL)wasGroupCallTooltipShown
+{
+    return [self boolForKey:OWSPreferencesKeyWasGroupCallTooltipShown defaultValue:NO];
+}
+
+- (void)incrementGroupCallTooltipShownCount
+{
+    NSUInteger currentCount = [self uintForKey:OWSPreferencesKeyWasGroupCallTooltipShownCount defaultValue:0];
+    NSUInteger incrementedCount = currentCount + 1;
+
+    // If we have shown the tooltip more than 3 times, don't show it again.
+    if (incrementedCount > 3) {
+        [self setWasGroupCallTooltipShown];
+    } else {
+        [self setUInt:incrementedCount forKey:OWSPreferencesKeyWasGroupCallTooltipShownCount];
+    }
+}
+
+- (void)setWasGroupCallTooltipShown
+{
+    [self setBool:YES forKey:OWSPreferencesKeyWasGroupCallTooltipShown];
+}
+
+- (BOOL)wasBlurTooltipShown
+{
+    return [self boolForKey:OWSPreferencesKeyWasBlurTooltipShown defaultValue:NO];
+}
+
+- (void)setWasBlurTooltipShown
+{
+    [self setBool:YES forKey:OWSPreferencesKeyWasBlurTooltipShown];
+}
+
+- (BOOL)wasDeleteForEveryoneConfirmationShown
+{
+    return [self boolForKey:OWSPreferencesKeyWasDeleteForEveryoneConfirmationShown defaultValue:NO];
+}
+
+- (void)setWasDeleteForEveryoneConfirmationShown
+{
+    [self setBool:YES forKey:OWSPreferencesKeyWasDeleteForEveryoneConfirmationShown];
 }
 
 #pragma mark direct call connectivity (non-TURN)

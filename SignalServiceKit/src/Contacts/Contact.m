@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import "Contact.h"
@@ -49,6 +49,7 @@ NS_ASSUME_NONNULL_BEGIN
                      cnContactId:(nullable NSString *)cnContactId
                        firstName:(nullable NSString *)firstName
                         lastName:(nullable NSString *)lastName
+                        nickname:(nullable NSString *)nickname
                         fullName:(NSString *)fullName
             userTextPhoneNumbers:(NSArray<NSString *> *)userTextPhoneNumbers
               phoneNumberNameMap:(NSDictionary<NSString *, NSString *> *)phoneNumberNameMap
@@ -70,6 +71,7 @@ NS_ASSUME_NONNULL_BEGIN
     _firstName = [firstName copy];
     _lastName = [lastName copy];
     _fullName = [fullName copy];
+    _nickname = [nickname copy];
     _userTextPhoneNumbers = [userTextPhoneNumbers copy];
     _phoneNumberNameMap = [phoneNumberNameMap copy];
     _parsedPhoneNumbers = [parsedPhoneNumbers copy];
@@ -170,6 +172,7 @@ NS_ASSUME_NONNULL_BEGIN
                       cnContactId:cnContact.identifier
                         firstName:cnContact.givenName.ows_stripped
                          lastName:cnContact.familyName.ows_stripped
+                         nickname:cnContact.nickname.ows_stripped
                          fullName:[Contact formattedFullNameWithCNContact:cnContact]
              userTextPhoneNumbers:userTextPhoneNumbers
                phoneNumberNameMap:phoneNumberNameMap
@@ -252,7 +255,11 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSString *)combineLeftName:(NSString *)leftName withRightName:(NSString *)rightName usingSeparator:(NSString *)separator {
     const BOOL leftNameNonEmpty = (leftName.length > 0);
     const BOOL rightNameNonEmpty = (rightName.length > 0);
-    
+
+    if (self.nickname.length > 0) {
+        return self.nickname;
+    }
+
     if (leftNameNonEmpty && rightNameNonEmpty) {
         return [NSString stringWithFormat:@"%@%@%@", leftName, separator, rightName];
     } else if (leftNameNonEmpty) {
@@ -331,6 +338,15 @@ NS_ASSUME_NONNULL_BEGIN
     }
 }
 
+- (NSArray<NSString *> *)e164PhoneNumbers
+{
+    NSMutableArray<NSString *> *result = [NSMutableArray new];
+    for (PhoneNumber *phoneNumber in self.parsedPhoneNumbers) {
+        [result addObject:phoneNumber.toE164];
+    }
+    return result;
+}
+
 // This method is used to de-bounce system contact fetch notifications
 // by checking for changes in the contact data.
 - (NSUInteger)hash
@@ -338,16 +354,18 @@ NS_ASSUME_NONNULL_BEGIN
     // base hash is some arbitrary number
     NSUInteger hash = 1825038313;
 
-    hash = hash ^ self.fullName.hash;
+    hash ^= self.fullName.hash;
 
-    hash = hash ^ self.imageHash;
+    hash ^= self.nickname.hash;
 
-    for (PhoneNumber *phoneNumber in self.parsedPhoneNumbers) {
-        hash = hash ^ phoneNumber.toE164.hash;
+    hash ^= self.imageHash;
+
+    for (NSString *phoneNumber in self.e164PhoneNumbers) {
+        hash ^= phoneNumber.hash;
     }
 
     for (NSString *email in self.emails) {
-        hash = hash ^ email.hash;
+        hash ^= email.hash;
     }
 
     return hash;
@@ -395,6 +413,7 @@ NS_ASSUME_NONNULL_BEGIN
     if (formattedFullName.length == 0) {
         mergedCNContact.namePrefix = newCNContact.namePrefix.ows_stripped;
         mergedCNContact.givenName = newCNContact.givenName.ows_stripped;
+        mergedCNContact.nickname = newCNContact.nickname.ows_stripped;
         mergedCNContact.middleName = newCNContact.middleName.ows_stripped;
         mergedCNContact.familyName = newCNContact.familyName.ows_stripped;
         mergedCNContact.nameSuffix = newCNContact.nameSuffix.ows_stripped;

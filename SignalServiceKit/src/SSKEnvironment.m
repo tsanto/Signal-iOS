@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import "SSKEnvironment.h"
@@ -17,19 +17,15 @@ static SSKEnvironment *sharedSSKEnvironment;
 @interface SSKEnvironment ()
 
 @property (nonatomic) id<ContactsManagerProtocol> contactsManager;
-@property (nonatomic) OWSMessageSender *messageSender;
+@property (nonatomic) MessageSender *messageSender;
 @property (nonatomic) id<ProfileManagerProtocol> profileManager;
 @property (nonatomic, nullable) OWSPrimaryStorage *primaryStorage;
-@property (nonatomic) ContactsUpdater *contactsUpdater;
 @property (nonatomic) TSNetworkManager *networkManager;
 @property (nonatomic) OWSMessageManager *messageManager;
 @property (nonatomic) OWSBlockingManager *blockingManager;
 @property (nonatomic) OWSIdentityManager *identityManager;
 @property (nonatomic) id<OWSUDManager> udManager;
 @property (nonatomic) OWSMessageDecrypter *messageDecrypter;
-@property (nonatomic) SSKMessageDecryptJobQueue *messageDecryptJobQueue;
-@property (nonatomic) OWSBatchMessageProcessor *batchMessageProcessor;
-@property (nonatomic) OWSMessageReceiver *messageReceiver;
 @property (nonatomic) GroupsV2MessageProcessor *groupsV2MessageProcessor;
 @property (nonatomic) TSSocketManager *socketManager;
 @property (nonatomic) TSAccountManager *tsAccountManager;
@@ -41,14 +37,21 @@ static SSKEnvironment *sharedSSKEnvironment;
 @property (nonatomic) id<SSKReachabilityManager> reachabilityManager;
 @property (nonatomic) id<OWSTypingIndicators> typingIndicators;
 @property (nonatomic) OWSAttachmentDownloads *attachmentDownloads;
+@property (nonatomic) SignalServiceAddressCache *signalServiceAddressCache;
 @property (nonatomic) StickerManager *stickerManager;
 @property (nonatomic) SDSDatabaseStorage *databaseStorage;
 @property (nonatomic) StorageCoordinator *storageCoordinator;
 @property (nonatomic) SSKPreferences *sskPreferences;
 @property (nonatomic) id<GroupsV2> groupsV2;
 @property (nonatomic) id<GroupV2Updates> groupV2Updates;
-@property (nonatomic) MessageProcessing *messageProcessing;
 @property (nonatomic) MessageFetcherJob *messageFetcherJob;
+@property (nonatomic) BulkProfileFetch *bulkProfileFetch;
+@property (nonatomic) BulkUUIDLookup *bulkUUIDLookup;
+@property (nonatomic) id<VersionedProfiles> versionedProfiles;
+@property (nonatomic) ModelReadCaches *modelReadCaches;
+@property (nonatomic) EarlyMessageManager *earlyMessageManager;
+@property (nonatomic) OWSMessagePipelineSupervisor *messagePipelineSupervisor;
+@property (nonatomic) AppExpiry *appExpiry;
 
 @end
 
@@ -62,12 +65,11 @@ static SSKEnvironment *sharedSSKEnvironment;
 
 - (instancetype)initWithContactsManager:(id<ContactsManagerProtocol>)contactsManager
                      linkPreviewManager:(OWSLinkPreviewManager *)linkPreviewManager
-                          messageSender:(OWSMessageSender *)messageSender
+                          messageSender:(MessageSender *)messageSender
                   messageSenderJobQueue:(MessageSenderJobQueue *)messageSenderJobQueue
              pendingReadReceiptRecorder:(id<PendingReadReceiptRecorder>)pendingReadReceiptRecorder
                          profileManager:(id<ProfileManagerProtocol>)profileManager
                          primaryStorage:(nullable OWSPrimaryStorage *)primaryStorage
-                        contactsUpdater:(ContactsUpdater *)contactsUpdater
                          networkManager:(TSNetworkManager *)networkManager
                          messageManager:(OWSMessageManager *)messageManager
                         blockingManager:(OWSBlockingManager *)blockingManager
@@ -78,9 +80,6 @@ static SSKEnvironment *sharedSSKEnvironment;
                             preKeyStore:(SSKPreKeyStore *)preKeyStore
                               udManager:(id<OWSUDManager>)udManager
                        messageDecrypter:(OWSMessageDecrypter *)messageDecrypter
-                 messageDecryptJobQueue:(SSKMessageDecryptJobQueue *)messageDecryptJobQueue
-                  batchMessageProcessor:(OWSBatchMessageProcessor *)batchMessageProcessor
-                        messageReceiver:(OWSMessageReceiver *)messageReceiver
                groupsV2MessageProcessor:(GroupsV2MessageProcessor *)groupsV2MessageProcessor
                           socketManager:(TSSocketManager *)socketManager
                        tsAccountManager:(TSAccountManager *)tsAccountManager
@@ -101,8 +100,15 @@ static SSKEnvironment *sharedSSKEnvironment;
                          sskPreferences:(SSKPreferences *)sskPreferences
                                groupsV2:(id<GroupsV2>)groupsV2
                          groupV2Updates:(id<GroupV2Updates>)groupV2Updates
-                      messageProcessing:(MessageProcessing *)messageProcessing
                       messageFetcherJob:(MessageFetcherJob *)messageFetcherJob
+                       bulkProfileFetch:(BulkProfileFetch *)bulkProfileFetch
+                         bulkUUIDLookup:(BulkUUIDLookup *)bulkUUIDLookup
+                      versionedProfiles:(id<VersionedProfiles>)versionedProfiles
+                        modelReadCaches:(ModelReadCaches *)modelReadCaches
+                    earlyMessageManager:(EarlyMessageManager *)earlyMessageManager
+              messagePipelineSupervisor:(OWSMessagePipelineSupervisor *)messagePipelineSupervisor
+                              appExpiry:(AppExpiry *)appExpiry
+                       messageProcessor:(MessageProcessor *)messageProcessor
 {
     self = [super init];
     if (!self) {
@@ -115,7 +121,6 @@ static SSKEnvironment *sharedSSKEnvironment;
     OWSAssertDebug(messageSenderJobQueue);
     OWSAssertDebug(pendingReadReceiptRecorder);
     OWSAssertDebug(profileManager);
-    OWSAssertDebug(contactsUpdater);
     OWSAssertDebug(networkManager);
     OWSAssertDebug(messageManager);
     OWSAssertDebug(blockingManager);
@@ -126,9 +131,6 @@ static SSKEnvironment *sharedSSKEnvironment;
     OWSAssertDebug(preKeyStore);
     OWSAssertDebug(udManager);
     OWSAssertDebug(messageDecrypter);
-    OWSAssertDebug(messageDecryptJobQueue);
-    OWSAssertDebug(batchMessageProcessor);
-    OWSAssertDebug(messageReceiver);
     OWSAssertDebug(groupsV2MessageProcessor);
     OWSAssertDebug(socketManager);
     OWSAssertDebug(tsAccountManager);
@@ -149,8 +151,14 @@ static SSKEnvironment *sharedSSKEnvironment;
     OWSAssertDebug(sskPreferences);
     OWSAssertDebug(groupsV2);
     OWSAssertDebug(groupV2Updates);
-    OWSAssertDebug(messageProcessing);
-    OWSCAssertDebug(messageFetcherJob);
+    OWSAssertDebug(messageFetcherJob);
+    OWSAssertDebug(bulkProfileFetch);
+    OWSAssertDebug(versionedProfiles);
+    OWSAssertDebug(bulkUUIDLookup);
+    OWSAssertDebug(modelReadCaches);
+    OWSAssertDebug(earlyMessageManager);
+    OWSAssertDebug(appExpiry);
+    OWSAssertDebug(messageProcessor);
 
     _contactsManager = contactsManager;
     _linkPreviewManager = linkPreviewManager;
@@ -159,7 +167,6 @@ static SSKEnvironment *sharedSSKEnvironment;
     _pendingReadReceiptRecorder = pendingReadReceiptRecorder;
     _profileManager = profileManager;
     _primaryStorage = primaryStorage;
-    _contactsUpdater = contactsUpdater;
     _networkManager = networkManager;
     _messageManager = messageManager;
     _blockingManager = blockingManager;
@@ -170,9 +177,6 @@ static SSKEnvironment *sharedSSKEnvironment;
     _preKeyStore = preKeyStore;
     _udManager = udManager;
     _messageDecrypter = messageDecrypter;
-    _messageDecryptJobQueue = messageDecryptJobQueue;
-    _batchMessageProcessor = batchMessageProcessor;
-    _messageReceiver = messageReceiver;
     _groupsV2MessageProcessor = groupsV2MessageProcessor;
     _socketManager = socketManager;
     _tsAccountManager = tsAccountManager;
@@ -193,8 +197,15 @@ static SSKEnvironment *sharedSSKEnvironment;
     _sskPreferences = sskPreferences;
     _groupsV2 = groupsV2;
     _groupV2Updates = groupV2Updates;
-    _messageProcessing = messageProcessing;
     _messageFetcherJob = messageFetcherJob;
+    _bulkProfileFetch = bulkProfileFetch;
+    _versionedProfiles = versionedProfiles;
+    _bulkUUIDLookup = bulkUUIDLookup;
+    _modelReadCaches = modelReadCaches;
+    _earlyMessageManager = earlyMessageManager;
+    _messagePipelineSupervisor = messagePipelineSupervisor;
+    _appExpiry = appExpiry;
+    _messageProcessor = messageProcessor;
 
     return self;
 }
@@ -287,11 +298,16 @@ static SSKEnvironment *sharedSSKEnvironment;
     //
     // We need to do as few writes as possible here, to avoid conflicts
     // with the migrations which haven't run yet.
+    [self.tsAccountManager warmCaches];
+    [self.signalServiceAddressCache warmCaches];
+    [self.remoteConfigManager warmCaches];
+    [self.udManager warmCaches];
     [self.blockingManager warmCaches];
     [self.profileManager warmCaches];
-    [self.tsAccountManager warmCaches];
     [self.readReceiptManager prepareCachedValues];
     [OWSKeyBackupService warmCaches];
+    [PinnedThreadManager warmCaches];
+    [self.typingIndicators warmCaches];
 }
 
 - (nullable OWSPrimaryStorage *)primaryStorage

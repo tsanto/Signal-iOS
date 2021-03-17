@@ -29,11 +29,13 @@ class MessageSenderJobQueueTest: SSKBaseTestSwift {
         let expectation = sentExpectation(message: message)
 
         let jobQueue = MessageSenderJobQueue()
-        jobQueue.setup()
         self.write { transaction in
             jobQueue.add(message: message.asPreparer, transaction: transaction)
         }
-
+        jobQueue.setup()
+        // Make sure the default global queue has a chance to process.
+        // Note that for this to work, this code must be using the same QoS as MessageSenderJobQueue.
+        DispatchQueue.global().sync(flags: .barrier) {}
         self.wait(for: [expectation], timeout: 0.1)
     }
 
@@ -161,7 +163,7 @@ class MessageSenderJobQueueTest: SSKBaseTestSwift {
             // back to a background queue), but the production code is simpler if we just manually
             // kick every retry in the test case.            
             XCTAssertNotNil(jobQueue.runAnyQueuedRetry())
-            self.wait(for: [expectedResend], timeout: 0.1)
+            self.wait(for: [expectedResend], timeout: 1)
         }
 
         // Verify one retry left

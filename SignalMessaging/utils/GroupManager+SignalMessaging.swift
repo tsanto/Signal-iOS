@@ -16,22 +16,20 @@ public extension GroupManager {
 
     // MARK: -
 
-    static func leaveGroupThreadAsyncWithUI(groupThread: TSGroupThread,
-                                            fromViewController: UIViewController,
-                                            success: (() -> Void)?) {
+    static func leaveGroupOrDeclineInviteAsyncWithUI(groupThread: TSGroupThread,
+                                                     fromViewController: UIViewController,
+                                                     replacementAdminUuid: UUID? = nil,
+                                                     success: (() -> Void)?) {
 
-        guard groupThread.isLocalUserInGroup() else {
+        guard groupThread.isLocalUserMemberOfAnyKind else {
             owsFailDebug("unexpectedly trying to leave group for which we're not a member.")
             return
         }
 
-        databaseStorage.write { transaction in
-            sendGroupQuitMessage(inThread: groupThread, transaction: transaction)
-        }
-
         ModalActivityIndicatorViewController.present(fromViewController: fromViewController, canCancel: false) { modalView in
             firstly {
-                self.leaveGroupOrDeclineInvite(groupThread: groupThread).asVoid()
+                self.leaveGroupOrDeclineInvitePromise(groupThread: groupThread,
+                                                      replacementAdminUuid: replacementAdminUuid).asVoid()
             }.done { _ in
                 modalView.dismiss {
                     success?()
@@ -42,7 +40,57 @@ public extension GroupManager {
                     OWSActionSheets.showActionSheet(title: NSLocalizedString("LEAVE_GROUP_FAILED",
                                                                              comment: "Error indicating that a group could not be left."))
                 }
-            }.retainUntilComplete()
+            }
+        }
+    }
+
+    static func acceptGroupInviteAsync(_ groupThread: TSGroupThread,
+                                       fromViewController: UIViewController,
+                                       success: @escaping () -> Void) {
+        ModalActivityIndicatorViewController.present(fromViewController: fromViewController,
+                                                     canCancel: false) { modalActivityIndicator in
+                                                        firstly { () -> Promise<TSGroupThread> in
+                                                            self.acceptGroupInvitePromise(groupThread: groupThread)
+                                                        }.done { _ in
+                                                            modalActivityIndicator.dismiss {
+                                                                success()
+                                                            }
+                                                        }.catch { error in
+                                                            owsFailDebug("Error: \(error)")
+
+                                                            modalActivityIndicator.dismiss {
+                                                                let title = NSLocalizedString("GROUPS_INVITE_ACCEPT_INVITE_FAILED",
+                                                                                              comment: "Error indicating that an error occurred while accepting an invite.")
+                                                                OWSActionSheets.showActionSheet(title: title)
+                                                            }
+                                                        }
+        }
+    }
+}
+
+// MARK: -
+
+extension GroupManager {
+    static func leaveGroupOrDeclineInvitePromise(groupThread: TSGroupThread,
+                                                 replacementAdminUuid: UUID? = nil) -> Promise<TSGroupThread> {
+        return firstly {
+            return GroupManager.messageProcessingPromise(for: groupThread,
+                                                         description: "Leave or decline invite")
+        }.then(on: .global()) {
+            GroupManager.localLeaveGroupOrDeclineInvite(groupThread: groupThread,
+                                                        replacementAdminUuid: replacementAdminUuid)
+        }
+    }
+
+    static func acceptGroupInvitePromise(groupThread: TSGroupThread) -> Promise<TSGroupThread> {
+        return firstly { () -> Promise<Void> in
+            return GroupManager.messageProcessingPromise(for: groupThread,
+                                                         description: "Accept invite")
+        }.then(on: .global()) { _ -> Promise<TSGroupThread> in
+            guard let groupModel = groupThread.groupModel as? TSGroupModelV2 else {
+                throw OWSAssertionError("Invalid group model.")
+            }
+            return GroupManager.localAcceptInviteToGroupV2(groupModel: groupModel)
         }
     }
 }

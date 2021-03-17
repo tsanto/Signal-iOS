@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 import Foundation
@@ -10,6 +10,10 @@ public extension UIEdgeInsets {
                   left: CurrentAppContext().isRTL ? trailing : leading,
                   bottom: bottom,
                   right: CurrentAppContext().isRTL ? leading : trailing)
+    }
+
+    init(hMargin: CGFloat, vMargin: CGFloat) {
+        self.init(top: vMargin, left: hMargin, bottom: vMargin, right: hMargin)
     }
 
     func plus(_ inset: CGFloat) -> UIEdgeInsets {
@@ -23,6 +27,11 @@ public extension UIEdgeInsets {
 
     func minus(_ inset: CGFloat) -> UIEdgeInsets {
         return plus(-inset)
+    }
+
+    var asSize: CGSize {
+        CGSize(width: left + right,
+               height: top + bottom)
     }
 }
 
@@ -57,6 +66,30 @@ public extension UINavigationController {
     }
 }
 
+// MARK: - SpacerView
+
+public class SpacerView: UIView {
+    private var preferredSize: CGSize
+
+    convenience public init(preferredWidth: CGFloat = UIView.noIntrinsicMetric, preferredHeight: CGFloat = UIView.noIntrinsicMetric) {
+        self.init(preferredSize: CGSize(width: preferredWidth, height: preferredHeight))
+    }
+
+    public init(preferredSize: CGSize = CGSize(square: UIView.noIntrinsicMetric)) {
+        self.preferredSize = preferredSize
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override public var intrinsicContentSize: CGSize {
+        get { preferredSize }
+        set { preferredSize = newValue }
+    }
+}
+
 // MARK: -
 
 @objc
@@ -66,25 +99,13 @@ public extension UIView {
     }
 
     func renderAsImage(opaque: Bool, scale: CGFloat) -> UIImage? {
-        if #available(iOS 10, *) {
-            let format = UIGraphicsImageRendererFormat()
-            format.scale = scale
-            format.opaque = opaque
-            let renderer = UIGraphicsImageRenderer(bounds: self.bounds,
-                                                   format: format)
-            return renderer.image { (context) in
-                self.layer.render(in: context.cgContext)
-            }
-        } else {
-            UIGraphicsBeginImageContextWithOptions(bounds.size, opaque, scale)
-            if let _ = UIGraphicsGetCurrentContext() {
-                drawHierarchy(in: bounds, afterScreenUpdates: true)
-                let image = UIGraphicsGetImageFromCurrentImageContext()
-                UIGraphicsEndImageContext()
-                return image
-            }
-            owsFailDebug("Could not create graphics context.")
-            return nil
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scale
+        format.opaque = opaque
+        let renderer = UIGraphicsImageRenderer(bounds: self.bounds,
+                                               format: format)
+        return renderer.image { (context) in
+            self.layer.render(in: context.cgContext)
         }
     }
 
@@ -173,6 +194,99 @@ public extension UIView {
     func setAccessibilityIdentifier(in container: NSObject, name: String) {
         self.accessibilityIdentifier = UIView.accessibilityIdentifier(in: container, name: name)
     }
+
+    func animateDecelerationToVerticalEdge(
+        withDuration duration: TimeInterval,
+        velocity: CGPoint,
+        velocityThreshold: CGFloat = 500,
+        boundingRect: CGRect,
+        completion: ((Bool) -> Void)? = nil
+    ) {
+        var velocity = velocity
+        if abs(velocity.x) < velocityThreshold { velocity.x = 0 }
+        if abs(velocity.y) < velocityThreshold { velocity.y = 0 }
+
+        let currentPosition = frame.origin
+
+        let referencePoint: CGPoint
+        if velocity != .zero {
+            // Calculate the time until we intersect with each edge with
+            // a constant velocity.
+
+            // time = (end position - start positon) / velocity
+
+            let timeUntilVerticalEdge: CGFloat
+            if velocity.x > 0 {
+                timeUntilVerticalEdge = ((boundingRect.maxX - width) - currentPosition.x) / velocity.x
+            } else if velocity.x < 0 {
+                timeUntilVerticalEdge = (boundingRect.minX - currentPosition.x) / velocity.x
+            } else {
+                timeUntilVerticalEdge = .greatestFiniteMagnitude
+            }
+
+            let timeUntilHorizontalEdge: CGFloat
+            if velocity.y > 0 {
+                timeUntilHorizontalEdge = ((boundingRect.maxY - height) - currentPosition.y) / velocity.y
+            } else if velocity.y < 0 {
+                timeUntilHorizontalEdge = (boundingRect.minY - currentPosition.y) / velocity.y
+            } else {
+                timeUntilHorizontalEdge = .greatestFiniteMagnitude
+            }
+
+            // See which edge we intersect with first and calculate the position
+            // on the other axis when we reach that intersection point.
+
+            // end position = (time * velocity) + start position
+
+            let intersectPoint: CGPoint
+            if timeUntilHorizontalEdge > timeUntilVerticalEdge {
+                intersectPoint = CGPoint(
+                    x: velocity.x > 0 ? (boundingRect.maxX - width) : boundingRect.minX,
+                    y: (timeUntilVerticalEdge * velocity.y) + currentPosition.y
+                )
+            } else {
+                intersectPoint = CGPoint(
+                    x: (timeUntilHorizontalEdge * velocity.x) + currentPosition.x,
+                    y: velocity.y > 0 ? (boundingRect.maxY - height) : boundingRect.minY
+                )
+            }
+
+            referencePoint = intersectPoint
+        } else {
+            referencePoint = currentPosition
+        }
+
+        let destinationFrame = CGRect(origin: referencePoint, size: frame.size).pinnedToVerticalEdge(of: boundingRect)
+        let distance = destinationFrame.origin.distance(currentPosition)
+
+        UIView.animate(
+            withDuration: duration,
+            delay: 0,
+            usingSpringWithDamping: 1,
+            initialSpringVelocity: abs(velocity.length / distance),
+            options: .curveEaseOut,
+            animations: { self.frame = destinationFrame },
+            completion: completion
+        )
+    }
+
+    func autoPinHeight(toHeightOf otherView: UIView) {
+        translatesAutoresizingMaskIntoConstraints = false
+
+        NSLayoutConstraint(item: self, attribute: .height, relatedBy: .equal, toItem: otherView, attribute: .height, multiplier: 1, constant: 0).autoInstall()
+    }
+
+    func autoPinWidth(toWidthOf otherView: UIView) {
+        translatesAutoresizingMaskIntoConstraints = false
+
+        NSLayoutConstraint(item: self, attribute: .width, relatedBy: .equal, toItem: otherView, attribute: .width, multiplier: 1, constant: 0).autoInstall()
+    }
+
+    func removeAllSubviews() {
+        for subview in subviews {
+            subview.removeFromSuperview()
+        }
+    }
 }
 
 // MARK: -
@@ -215,82 +329,6 @@ public extension UIViewController {
 
 // MARK: -
 
-public extension CGFloat {
-    func clamp(_ minValue: CGFloat, _ maxValue: CGFloat) -> CGFloat {
-        return CGFloatClamp(self, minValue, maxValue)
-    }
-
-    func clamp01() -> CGFloat {
-        return CGFloatClamp01(self)
-    }
-
-    // Linear interpolation
-    func lerp(_ minValue: CGFloat, _ maxValue: CGFloat) -> CGFloat {
-        return CGFloatLerp(minValue, maxValue, self)
-    }
-
-    // Inverse linear interpolation
-    func inverseLerp(_ minValue: CGFloat, _ maxValue: CGFloat, shouldClamp: Bool = false) -> CGFloat {
-        let value = CGFloatInverseLerp(self, minValue, maxValue)
-        return (shouldClamp ? CGFloatClamp01(value) : value)
-    }
-
-    static let halfPi: CGFloat = CGFloat.pi * 0.5
-
-    func fuzzyEquals(_ other: CGFloat, tolerance: CGFloat = 0.001) -> Bool {
-        return abs(self - other) < tolerance
-    }
-
-    var square: CGFloat {
-        return self * self
-    }
-}
-
-// MARK: -
-
-public extension Double {
-    func clamp(_ minValue: Double, _ maxValue: Double) -> Double {
-        return max(minValue, min(maxValue, self))
-    }
-
-    func clamp01() -> Double {
-        return clamp(0, 1)
-    }
-
-    // Linear interpolation
-    func lerp(_ minValue: Double, _ maxValue: Double) -> Double {
-        return (minValue * (1 - self)) + (maxValue * self)
-    }
-
-    // Inverse linear interpolation
-    func inverseLerp(_ minValue: Double, _ maxValue: Double, shouldClamp: Bool = false) -> Double {
-        let value = (self - minValue) / (maxValue - minValue)
-        return (shouldClamp ? value.clamp01() : value)
-    }
-}
-
-// MARK: -
-
-public extension Int {
-    func clamp(_ minValue: Int, _ maxValue: Int) -> Int {
-        assert(minValue <= maxValue)
-
-        return Swift.max(minValue, Swift.min(maxValue, self))
-    }
-}
-
-// MARK: -
-
-public extension UInt {
-    func clamp(_ minValue: UInt, _ maxValue: UInt) -> UInt {
-        assert(minValue <= maxValue)
-
-        return Swift.max(minValue, Swift.min(maxValue, self))
-    }
-}
-
-// MARK: -
-
 public extension CGPoint {
     func toUnitCoordinates(viewBounds: CGRect, shouldClamp: Bool) -> CGPoint {
         return CGPoint(x: (x - viewBounds.origin.x).inverseLerp(0, viewBounds.width, shouldClamp: shouldClamp),
@@ -316,6 +354,14 @@ public extension CGPoint {
 
     func plus(_ value: CGPoint) -> CGPoint {
         return CGPointAdd(self, value)
+    }
+
+    func plusX(_ value: CGFloat) -> CGPoint {
+        CGPointAdd(self, CGPoint(x: value, y: 0))
+    }
+
+    func plusY(_ value: CGFloat) -> CGPoint {
+        CGPointAdd(self, CGPoint(x: 0, y: value))
     }
 
     func minus(_ value: CGPoint) -> CGPoint {
@@ -395,18 +441,66 @@ public extension CGSize {
         return CGSizeCeil(self)
     }
 
+    var floor: CGSize {
+        return CGSizeFloor(self)
+    }
+
+    var round: CGSize {
+        return CGSizeRound(self)
+    }
+
     var abs: CGSize {
         return CGSize(width: Swift.abs(width), height: Swift.abs(height))
     }
 
+    var largerAxis: CGFloat {
+        return Swift.max(width, height)
+    }
+
+    var smallerAxis: CGFloat {
+        return min(width, height)
+    }
+
     init(square: CGFloat) {
         self.init(width: square, height: square)
+    }
+
+    func plus(_ value: CGSize) -> CGSize {
+        return CGSizeAdd(self, value)
+    }
+
+    func max(_ other: CGSize) -> CGSize {
+        return CGSize(width: Swift.max(self.width, other.width),
+                      height: Swift.max(self.height, other.height))
+    }
+
+    static func square(_ size: CGFloat) -> CGSize {
+        return CGSize(width: size, height: size)
     }
 }
 
 // MARK: -
 
 public extension CGRect {
+
+    var x: CGFloat {
+        get {
+            origin.x
+        }
+        set {
+            origin.x = newValue
+        }
+    }
+
+    var y: CGFloat {
+        get {
+            origin.y
+        }
+        set {
+            origin.y = newValue
+        }
+    }
+
     var center: CGPoint {
         return CGPoint(x: midX, y: midY)
     }
@@ -425,6 +519,43 @@ public extension CGRect {
 
     var bottomRight: CGPoint {
         return CGPoint(x: maxX, y: maxY)
+    }
+
+    func pinnedToVerticalEdge(of boundingRect: CGRect) -> CGRect {
+        var newRect = self
+
+        // If we're positioned outside of the vertical bounds,
+        // we need to move to the nearest bound
+        let positionedOutOfVerticalBounds = newRect.minY < boundingRect.minY || newRect.maxY > boundingRect.maxY
+
+        // If we're position anywhere but exactly at the vertical
+        // edges (left and right of bounding rect), we need to
+        // move to the nearest edge
+        let positionedAwayFromVerticalEdges = boundingRect.minX != newRect.minX && boundingRect.maxX != newRect.maxX
+
+        if positionedOutOfVerticalBounds {
+            let distanceFromTop = newRect.minY - boundingRect.minY
+            let distanceFromBottom = boundingRect.maxY - newRect.maxY
+
+            if distanceFromTop > distanceFromBottom {
+                newRect.origin.y = boundingRect.maxY - newRect.height
+            } else {
+                newRect.origin.y = boundingRect.minY
+            }
+        }
+
+        if positionedAwayFromVerticalEdges {
+            let distanceFromLeading = newRect.minX - boundingRect.minX
+            let distanceFromTrailing = boundingRect.maxX - newRect.maxX
+
+            if distanceFromLeading > distanceFromTrailing {
+                newRect.origin.x = boundingRect.maxX - newRect.width
+            } else {
+                newRect.origin.x = boundingRect.minX
+            }
+        }
+
+        return newRect
     }
 }
 
@@ -584,10 +715,7 @@ public extension UIImageView {
 @objc
 public extension UISearchBar {
     var textField: UITextField? {
-        // TODO Xcode 11: Delete this once we're compiling only in Xcode 11
-        #if swift(>=5.1)
         if #available(iOS 13, *) { return searchTextField }
-        #endif
 
         guard let textField = self.value(forKey: "_searchField") as? UITextField else {
             owsFailDebug("Couldn't find UITextField.")
@@ -605,6 +733,16 @@ public extension UITextView {
         // https://stackoverflow.com/a/27865136/4509555
         inputDelegate?.selectionWillChange(self)
         inputDelegate?.selectionDidChange(self)
+    }
+
+    func updateVerticalInsetsForDynamicBodyType(defaultInsets: CGFloat) {
+        let currentFontSize = UIFont.ows_dynamicTypeBody.pointSize
+        let systemDefaultFontSize: CGFloat = 17
+        let insetFontAdjustment = systemDefaultFontSize > currentFontSize ? systemDefaultFontSize - currentFontSize : 0
+        let topInset = defaultInsets + insetFontAdjustment
+        let bottomInset = systemDefaultFontSize > currentFontSize ? topInset - 1 : topInset
+        textContainerInset.top = topInset
+        textContainerInset.bottom = bottomInset
     }
 }
 
@@ -642,3 +780,60 @@ public extension UIToolbar {
         return toolbar
     }
  }
+
+// MARK: -
+
+public extension UIEdgeInsets {
+    var totalWidth: CGFloat {
+        left + right
+    }
+
+    var totalHeight: CGFloat {
+        top + bottom
+    }
+}
+
+// MARK: - Gestures
+
+public extension UIView {
+    func containsGestureLocation(_ gestureRecognizer: UIGestureRecognizer,
+                                 hotAreaAdjustment: CGFloat? = nil) -> Bool {
+        let location = gestureRecognizer.location(in: self)
+        var hotArea = bounds
+        if let hotAreaAdjustment = hotAreaAdjustment {
+            owsAssertDebug(hotAreaAdjustment > 0)
+            // Permissive hot area to make it easier to perform gesture.
+            hotArea = hotArea.insetBy(dx: -hotAreaAdjustment, dy: -hotAreaAdjustment)
+        }
+        return hotArea.contains(location)
+    }
+}
+
+// MARK: -
+
+public extension UIStackView {
+    func addArrangedSubviews(_ subviews: [UIView], reverseOrder: Bool = false) {
+        var subviews = subviews
+        if reverseOrder {
+            subviews.reverse()
+        }
+        for subview in subviews {
+            addArrangedSubview(subview)
+        }
+    }
+}
+
+// MARK: -
+
+// This works around a UIStackView bug where hidden subviews
+// sometimes re-appear.
+@objc
+public extension UIView {
+    var isHiddenInStackView: Bool {
+        get { isHidden }
+        set {
+            isHidden = newValue
+            alpha = newValue ? 0 : 1
+        }
+    }
+}

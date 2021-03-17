@@ -9,9 +9,9 @@ class ImageCacheTest: SignalBaseTest {
 
     var imageCache: ImageCache!
 
-    let firstVariation = UIImage(color: .red, size: CGSize(width: 1, height: 1))
-    let secondVariation = UIImage(color: .blue, size: CGSize(width: 1, height: 1))
-    let otherImage = UIImage(color: .green, size: CGSize(width: 1, height: 1))
+    let firstVariation = UIImage(color: .red, size: CGSize(square: 1))
+    let secondVariation = UIImage(color: .blue, size: CGSize(square: 1))
+    let otherImage = UIImage(color: .green, size: CGSize(square: 1))
 
     let cacheKey1 = "cache-key-1" as NSString
     let cacheKey2 = "cache-key-2" as NSString
@@ -31,9 +31,6 @@ class ImageCacheTest: SignalBaseTest {
     }
 
     func testSetGet() {
-        XCTAssertEqual(UIImage(), UIImage())
-        XCTAssertTrue(UIImage() == UIImage())
-
         XCTAssertEqual(firstVariation, imageCache.image(forKey: cacheKey1, diameter: 100))
         XCTAssertEqual(secondVariation, imageCache.image(forKey: cacheKey1, diameter: 200))
         XCTAssertNotEqual(secondVariation, imageCache.image(forKey: cacheKey1, diameter: 100))

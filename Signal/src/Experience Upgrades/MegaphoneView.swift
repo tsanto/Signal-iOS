@@ -14,7 +14,16 @@ class MegaphoneView: UIView, ExperienceUpgradeView {
     var imageSize: ImageSize = .small {
         willSet { assert(!hasPresented) }
     }
-    var imageName: String?
+    var imageName: String? {
+        didSet {
+            if imageName != nil { image = nil }
+        }
+    }
+    var image: UIImage? {
+        didSet {
+            if image != nil { imageName = nil }
+        }
+    }
 
     var animation: Animation?
     struct Animation {
@@ -117,7 +126,7 @@ class MegaphoneView: UIView, ExperienceUpgradeView {
 
         guard !hasPresented else { return owsFailDebug("can only present once") }
 
-        guard titleText != nil, bodyText != nil, (imageName != nil || animation != nil) else {
+        guard titleText != nil, bodyText != nil, (imageName != nil || image != nil || animation != nil) else {
             return owsFailDebug("megaphone is not prepared for presentation")
         }
 
@@ -188,7 +197,7 @@ class MegaphoneView: UIView, ExperienceUpgradeView {
         let titleLabel = UILabel()
         titleLabel.numberOfLines = 0
         titleLabel.lineBreakMode = .byWordWrapping
-        titleLabel.font = UIFont.systemFont(ofSize: 17).ows_semibold()
+        titleLabel.font = UIFont.systemFont(ofSize: 17).ows_semibold
         titleLabel.textColor = Theme.darkThemePrimaryColor
         titleLabel.text = titleText
 
@@ -213,10 +222,14 @@ class MegaphoneView: UIView, ExperienceUpgradeView {
     private var animationView: AnimationView?
     func createImageContainer() -> UIView {
         let container: UIView
-        if let imageName = imageName {
+
+        if let image = { () -> UIImage? in
+            if let imageName = imageName { return UIImage(named: imageName) }
+            return image
+        }() {
             container = UIView()
             let imageView = UIImageView()
-            imageView.image = UIImage(named: imageName)
+            imageView.image = image
             imageView.contentMode = .scaleAspectFit
             container.addSubview(imageView)
             imageView.autoPinWidthToSuperview()
@@ -283,7 +296,7 @@ class MegaphoneView: UIView, ExperienceUpgradeView {
             for button in buttons {
                 let buttonView = createButtonView(
                     button,
-                    font: previousButton == nil ? UIFont.systemFont(ofSize: 15).ows_semibold() : .systemFont(ofSize: 15)
+                    font: previousButton == nil ? UIFont.systemFont(ofSize: 15).ows_semibold : .systemFont(ofSize: 15)
                 )
 
                 switch buttonOrientation {
@@ -335,8 +348,8 @@ class MegaphoneView: UIView, ExperienceUpgradeView {
         dismissButton.autoPinEdge(toSuperviewEdge: .top)
     }
 
-    func snoozeButton(fromViewController: UIViewController, snoozeCopy: @escaping () -> String = { MegaphoneStrings.weWillRemindYouLater }) -> Button {
-        return Button(title: MegaphoneStrings.remindMeLater) { [weak self] in
+    func snoozeButton(fromViewController: UIViewController, snoozeTitle: String = MegaphoneStrings.remindMeLater, snoozeCopy: @escaping () -> String = { MegaphoneStrings.weWillRemindYouLater }) -> Button {
+        return Button(title: snoozeTitle) { [weak self] in
             self?.markAsSnoozed()
             self?.dismiss {
                 self?.presentToast(text: snoozeCopy(), fromViewController: fromViewController)

@@ -13,11 +13,14 @@ typedef NS_CLOSED_ENUM(NSUInteger, OWSSyncMessageRequestResponseType) { OWSSyncM
 
 @interface OWSSyncMessageRequestResponseMessage : OWSOutgoingSyncMessage
 
++ (instancetype)new NS_UNAVAILABLE;
 - (instancetype)init NS_UNAVAILABLE;
 - (instancetype)initWithThread:(TSThread *)thread NS_UNAVAILABLE;
 - (instancetype)initWithTimestamp:(uint64_t)timestamp thread:(TSThread *)thread NS_UNAVAILABLE;
+
 - (instancetype)initWithThread:(TSThread *)thread
                   responseType:(OWSSyncMessageRequestResponseType)responseType NS_DESIGNATED_INITIALIZER;
+- (nullable instancetype)initWithCoder:(NSCoder *)coder NS_DESIGNATED_INITIALIZER;
 
 @end
 

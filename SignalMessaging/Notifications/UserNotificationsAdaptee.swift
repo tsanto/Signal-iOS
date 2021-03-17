@@ -1,12 +1,11 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 import Foundation
 import UserNotifications
 import PromiseKit
 
-@available(iOS 10.0, *)
 public class UserNotificationConfig {
 
     class var allNotificationCategories: Set<UNNotificationCategory> {
@@ -15,7 +14,7 @@ public class UserNotificationConfig {
     }
 
     class func notificationActions(for category: AppNotificationCategory) -> [UNNotificationAction] {
-        return category.actions.map { notificationAction($0) }
+        return category.actions.compactMap { notificationAction($0) }
     }
 
     class func notificationCategory(_ category: AppNotificationCategory) -> UNNotificationCategory {
@@ -25,7 +24,7 @@ public class UserNotificationConfig {
                                       options: [])
     }
 
-    class func notificationAction(_ action: AppNotificationAction) -> UNNotificationAction {
+    class func notificationAction(_ action: AppNotificationAction) -> UNNotificationAction? {
         switch action {
         case .answerCall:
             return UNNotificationAction(identifier: action.identifier,
@@ -53,16 +52,24 @@ public class UserNotificationConfig {
             return UNNotificationAction(identifier: action.identifier,
                                         title: CallStrings.showThreadButtonTitle,
                                         options: [.foreground])
+        case .reactWithThumbsUp:
+            return UNNotificationAction(identifier: action.identifier,
+                                        title: MessageStrings.reactWithThumbsUpNotificationAction,
+                                        options: [])
+
+        case .showCallLobby:
+            // Currently, .showCallLobby is only used as a default action.
+            owsFailDebug("Show call lobby not supported as a UNNotificationAction")
+            return nil
         }
     }
 
     public class func action(identifier: String) -> AppNotificationAction? {
-        return AppNotificationAction.allCases.first { notificationAction($0).identifier == identifier }
+        return AppNotificationAction.allCases.first { notificationAction($0)?.identifier == identifier }
     }
 
 }
 
-@available(iOS 10.0, *)
 class UserNotificationPresenterAdaptee: NSObject {
 
     private let notificationCenter: UNUserNotificationCenter
@@ -75,13 +82,12 @@ class UserNotificationPresenterAdaptee: NSObject {
     }
 }
 
-@available(iOS 10.0, *)
 extension UserNotificationPresenterAdaptee: NotificationPresenterAdaptee {
 
     // MARK: - Dependencies
 
     var tsAccountManager: TSAccountManager {
-        return .sharedInstance()
+        return .shared()
     }
 
     // MARK: -
@@ -124,7 +130,7 @@ extension UserNotificationPresenterAdaptee: NotificationPresenterAdaptee {
         content.categoryIdentifier = category.identifier
         content.userInfo = userInfo
         let isAppActive = CurrentAppContext().isMainAppAndActive
-        if let sound = sound, sound != OWSSound.none {
+        if let sound = sound, sound != OWSStandardSound.none.rawValue {
             content.sound = sound.notificationSound(isQuiet: isAppActive)
         }
 
@@ -136,8 +142,11 @@ extension UserNotificationPresenterAdaptee: NotificationPresenterAdaptee {
         }
 
         let trigger: UNNotificationTrigger?
-        let checkForCancel = (category == .incomingMessageWithActions ||
-                              category == .incomingMessageWithoutActions)
+        let checkForCancel = (category == .incomingMessageWithActions_CanReply ||
+                                category == .incomingMessageWithActions_CannotReply ||
+                                category == .incomingMessageWithoutActions ||
+                                category == .incomingReactionWithActions_CanReply ||
+                                category == .incomingReactionWithActions_CannotReply)
         if checkForCancel && hasReceivedSyncMessageRecently {
             assert(userInfo[AppNotificationUserInfoKey.threadId] != nil)
             trigger = UNTimeIntervalNotificationTrigger(timeInterval: kNotificationDelayForRemoteRead, repeats: false)
@@ -169,6 +178,7 @@ extension UserNotificationPresenterAdaptee: NotificationPresenterAdaptee {
                 owsFailDebug("Error: \(error)")
                 return
             }
+
             guard notificationIdentifier != UserNotificationPresenterAdaptee.kMigrationNotificationId else {
                 return
             }
@@ -201,6 +211,36 @@ extension UserNotificationPresenterAdaptee: NotificationPresenterAdaptee {
             }
 
             guard notificationThreadId == threadId else {
+                continue
+            }
+
+            cancelNotification(notification)
+        }
+    }
+
+    func cancelNotifications(messageId: String) {
+        AssertIsOnMainThread()
+        for notification in notifications.values {
+            guard let notificationMessageId = notification.content.userInfo[AppNotificationUserInfoKey.messageId] as? String else {
+                continue
+            }
+
+            guard notificationMessageId == messageId else {
+                continue
+            }
+
+            cancelNotification(notification)
+        }
+    }
+
+    func cancelNotifications(reactionId: String) {
+        AssertIsOnMainThread()
+        for notification in notifications.values {
+            guard let notificationReactionId = notification.content.userInfo[AppNotificationUserInfoKey.reactionId] as? String else {
+                continue
+            }
+
+            guard notificationReactionId == reactionId else {
                 continue
             }
 
@@ -244,8 +284,11 @@ extension UserNotificationPresenterAdaptee: NotificationPresenterAdaptee {
         }
 
         switch category {
-        case .incomingMessageWithActions,
+        case .incomingMessageWithActions_CanReply,
+             .incomingMessageWithActions_CannotReply,
              .incomingMessageWithoutActions,
+             .incomingReactionWithActions_CanReply,
+             .incomingReactionWithActions_CannotReply,
              .infoOrErrorMessage:
             // If the app is in the foreground, show these notifications
             // unless the corresponding conversation is already open.
@@ -282,9 +325,8 @@ public protocol ConversationSplit {
 }
 
 extension OWSSound {
-    @available(iOS 10.0, *)
     func notificationSound(isQuiet: Bool) -> UNNotificationSound {
-        guard let filename = OWSSounds.filename(for: self, quiet: isQuiet) else {
+        guard let filename = OWSSounds.filename(forSound: self, quiet: isQuiet) else {
             owsFailDebug("filename was unexpectedly nil")
             return UNNotificationSound.default
         }

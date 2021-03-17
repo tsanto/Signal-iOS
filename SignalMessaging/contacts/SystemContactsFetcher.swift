@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2019 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 import Foundation
@@ -23,7 +23,8 @@ protocol ContactStoreAdaptee {
 
 public
 class ContactsFrameworkContactStoreAdaptee: NSObject, ContactStoreAdaptee {
-    private let contactStore = CNContactStore()
+    private let contactStoreForLargeRequests = CNContactStore()
+    private let contactStoreForSmallRequests = CNContactStore()
     private var changeHandler: (() -> Void)?
     private var initializedObserver = false
     private var lastSortOrder: CNContactSortOrder?
@@ -68,7 +69,7 @@ class ContactsFrameworkContactStoreAdaptee: NSObject, ContactStoreAdaptee {
 
     @objc
     func didBecomeActive() {
-        AppReadiness.runNowOrWhenAppDidBecomeReady {
+        AppReadiness.runNowOrWhenAppDidBecomeReadyAsync {
             let currentSortOrder = CNContactsUserDefaults.shared().sortOrder
 
             guard currentSortOrder != self.lastSortOrder else {
@@ -92,16 +93,18 @@ class ContactsFrameworkContactStoreAdaptee: NSObject, ContactStoreAdaptee {
     }
 
     func requestAccess(completionHandler: @escaping (Bool, Error?) -> Void) {
-        self.contactStore.requestAccess(for: .contacts, completionHandler: completionHandler)
+        contactStoreForLargeRequests.requestAccess(for: .contacts, completionHandler: completionHandler)
     }
 
     func fetchContacts() -> Result<[Contact], Error> {
-        var systemContacts = [CNContact]()
+        var contacts = [Contact]()
         do {
             let contactFetchRequest = CNContactFetchRequest(keysToFetch: ContactsFrameworkContactStoreAdaptee.allowedContactKeys)
             contactFetchRequest.sortOrder = .userDefault
-            try self.contactStore.enumerateContacts(with: contactFetchRequest) { (contact, _) -> Void in
-                systemContacts.append(contact)
+            try autoreleasepool {
+                try contactStoreForLargeRequests.enumerateContacts(with: contactFetchRequest) { (systemContact, _) -> Void in
+                    contacts.append(Contact(systemContact: systemContact))
+                }
             }
         } catch let error as NSError {
             if error.domain == CNErrorDomain, error.code == CNError.Code.communicationError.rawValue {
@@ -113,7 +116,6 @@ class ContactsFrameworkContactStoreAdaptee: NSObject, ContactStoreAdaptee {
             return .error(error)
         }
 
-        let contacts = systemContacts.map { Contact(systemContact: $0) }
         return .success(contacts)
     }
 
@@ -124,7 +126,7 @@ class ContactsFrameworkContactStoreAdaptee: NSObject, ContactStoreAdaptee {
             contactFetchRequest.sortOrder = .userDefault
             contactFetchRequest.predicate = CNContact.predicateForContacts(withIdentifiers: [contactId])
 
-            try self.contactStore.enumerateContacts(with: contactFetchRequest) { (contact, _) -> Void in
+            try self.contactStoreForSmallRequests.enumerateContacts(with: contactFetchRequest) { (contact, _) -> Void in
                 guard result == nil else {
                     owsFailDebug("More than one contact with contact id.")
                     return
@@ -363,11 +365,13 @@ public class SystemContactsFetcher: NSObject {
             guard let contacts = fetchedContacts else {
                 owsFailDebug("contacts was unexpectedly not set.")
                 completion(nil)
+                return
             }
 
-            Logger.info("fetched \(contacts.count) contacts.")
-
-            let contactsHash = contacts.hashValue
+            var contactsHash = 0
+            for contact in contacts {
+                contactsHash = contactsHash ^ contact.hash
+            }
 
             DispatchQueue.main.async {
                 var shouldNotifyDelegate = false

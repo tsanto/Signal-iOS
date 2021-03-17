@@ -28,6 +28,15 @@ public class FullTextSearchFinder: NSObject {
         }
     }
 
+    @objc
+    public func modelWasUpdatedObjc(model: TSYapDatabaseObject, transaction: SDSAnyWriteTransaction) {
+        guard let model = model as? SDSModel else {
+            owsFailDebug("Invalid model.")
+            return
+        }
+        modelWasUpdated(model: model, transaction: transaction)
+    }
+
     public func modelWasUpdated(model: SDSModel, transaction: SDSAnyWriteTransaction) {
         assert(type(of: model).shouldBeIndexedForFTS)
 
@@ -342,6 +351,13 @@ class GRDBFullTextSearchFinder: NSObject {
                                                         return nil
             }
             return model
+        case SignalRecipient.collection():
+            guard let model = SignalRecipient.anyFetch(uniqueId: uniqueId,
+                                                     transaction: transaction.asAnyRead) else {
+                                                        owsFailDebug("Couldn't load record: \(collection)")
+                                                        return nil
+            }
+            return model
         default:
             owsFailDebug("Unexpected record type: \(collection)")
             return nil
@@ -355,7 +371,9 @@ class GRDBFullTextSearchFinder: NSObject {
         let query = FullTextSearchFinder.query(searchText: searchText)
 
         guard query.count > 0 else {
-            owsFailDebug("Empty query.")
+            // FullTextSearchFinder.query filters some characters, so query
+            // may now be empty.
+            Logger.warn("Empty query.")
             return
         }
 
@@ -434,7 +452,7 @@ class AnySearchIndexer {
     // MARK: - Dependencies
 
     private static var tsAccountManager: TSAccountManager {
-        return TSAccountManager.sharedInstance()
+        return TSAccountManager.shared()
     }
 
     private class var contactsManager: ContactsManagerProtocol {
@@ -471,6 +489,10 @@ class AnySearchIndexer {
         let nationalNumber: String? = { (recipientId: String?) -> String? in
             guard let recipientId = recipientId else { return nil }
 
+            guard recipientId != kLocalProfileInvariantPhoneNumber else {
+                return ""
+            }
+
             guard let phoneNumber = PhoneNumber(fromE164: recipientId) else {
                 owsFailDebug("unexpected unparseable recipientId: \(recipientId)")
                 return ""
@@ -488,7 +510,7 @@ class AnySearchIndexer {
     }
 
     private static let messageIndexer: SearchIndexer<TSMessage> = SearchIndexer { (message: TSMessage, transaction: SDSAnyReadTransaction) in
-        if let bodyText = message.bodyText(with: transaction) {
+        if let bodyText = message.rawBody(with: transaction.unwrapGrdbRead) {
             return bodyText
         }
         return ""
@@ -513,6 +535,8 @@ class AnySearchIndexer {
             return self.messageIndexer.index(message, transaction: transaction)
         } else if let signalAccount = object as? SignalAccount {
             return self.recipientIndexer.index(signalAccount.recipientAddress, transaction: transaction)
+        } else if let signalRecipient = object as? SignalRecipient {
+            return self.recipientIndexer.index(signalRecipient.address, transaction: transaction)
         } else {
             return nil
         }

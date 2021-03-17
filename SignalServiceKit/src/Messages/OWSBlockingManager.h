@@ -11,8 +11,14 @@ NS_ASSUME_NONNULL_BEGIN
 @class TSGroupModel;
 @class TSThread;
 
-extern NSNotificationName const kNSNotificationName_BlockListDidChange;
+extern NSNotificationName const kNSNotificationNameBlockListDidChange;
 extern NSNotificationName const OWSBlockingManagerBlockedSyncDidComplete;
+
+typedef NS_CLOSED_ENUM(NSUInteger, BlockMode) {
+    BlockMode_Remote,
+    BlockMode_LocalShouldLeaveGroups,
+    BlockMode_LocalShouldNotLeaveGroups,
+};
 
 // This class can be safely accessed and used from any thread.
 @interface OWSBlockingManager : NSObject
@@ -21,12 +27,12 @@ extern NSNotificationName const OWSBlockingManagerBlockedSyncDidComplete;
 
 - (instancetype)init NS_DESIGNATED_INITIALIZER;
 
-+ (instancetype)sharedManager;
++ (instancetype)shared;
 
-- (void)addBlockedAddress:(SignalServiceAddress *)address wasLocallyInitiated:(BOOL)wasLocallyInitiated;
+- (void)addBlockedAddress:(SignalServiceAddress *)address blockMode:(BlockMode)blockMode;
 
 - (void)addBlockedAddress:(SignalServiceAddress *)address
-      wasLocallyInitiated:(BOOL)wasLocallyInitiated
+                blockMode:(BlockMode)blockMode
               transaction:(SDSAnyWriteTransaction *)transaction;
 
 - (void)removeBlockedAddress:(SignalServiceAddress *)address wasLocallyInitiated:(BOOL)wasLocallyInitiated;
@@ -47,14 +53,14 @@ extern NSNotificationName const OWSBlockingManagerBlockedSyncDidComplete;
 @property (readonly) NSArray<NSData *> *blockedGroupIds;
 @property (readonly) NSArray<TSGroupModel *> *blockedGroups;
 
-- (void)addBlockedGroup:(TSGroupModel *)groupModel wasLocallyInitiated:(BOOL)wasLocallyInitiated;
+- (void)addBlockedGroup:(TSGroupModel *)groupModel blockMode:(BlockMode)blockMode;
 
 - (void)addBlockedGroup:(TSGroupModel *)groupModel
-    wasLocallyInitiated:(BOOL)wasLocallyInitiated
+              blockMode:(BlockMode)blockMode
             transaction:(SDSAnyWriteTransaction *)transaction;
 
 - (void)addBlockedGroupId:(NSData *)groupId
-      wasLocallyInitiated:(BOOL)wasLocallyInitiated
+                blockMode:(BlockMode)blockMode
               transaction:(SDSAnyWriteTransaction *)transaction;
 
 - (void)removeBlockedGroupId:(NSData *)groupId wasLocallyInitiated:(BOOL)wasLocallyInitiated;
@@ -65,9 +71,9 @@ extern NSNotificationName const OWSBlockingManagerBlockedSyncDidComplete;
 
 - (nullable TSGroupModel *)cachedGroupDetailsWithGroupId:(NSData *)groupId;
 
-- (void)addBlockedThread:(TSThread *)thread wasLocallyInitiated:(BOOL)wasLocallyInitiated;
+- (void)addBlockedThread:(TSThread *)thread blockMode:(BlockMode)blockMode;
 - (void)addBlockedThread:(TSThread *)thread
-     wasLocallyInitiated:(BOOL)wasLocallyInitiated
+               blockMode:(BlockMode)blockMode
              transaction:(SDSAnyWriteTransaction *)transaction;
 
 - (void)removeBlockedThread:(TSThread *)thread wasLocallyInitiated:(BOOL)wasLocallyInitiated;

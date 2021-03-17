@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 import UserNotifications
@@ -16,8 +16,8 @@ class NotificationService: UNNotificationServiceExtension {
         return SSKEnvironment.shared.storageCoordinator
     }
 
-    var messageProcessing: MessageProcessing {
-        return SSKEnvironment.shared.messageProcessing
+    var messageProcessor: MessageProcessor {
+        return .shared
     }
 
     var messageFetcherJob: MessageFetcherJob {
@@ -67,7 +67,7 @@ class NotificationService: UNNotificationServiceExtension {
 
             Logger.info("Processing received notification.")
 
-            AppReadiness.runNowOrWhenAppDidBecomeReady { self.fetchAndProcessMessages() }
+            AppReadiness.runNowOrWhenAppDidBecomeReadySync { self.fetchAndProcessMessages() }
         }
     }
 
@@ -104,7 +104,7 @@ class NotificationService: UNNotificationServiceExtension {
 
         Logger.info("")
 
-        _ = AppVersion.sharedInstance()
+        _ = AppVersion.shared()
 
         Cryptography.seedRandom()
 
@@ -161,7 +161,7 @@ class NotificationService: UNNotificationServiceExtension {
         AssertIsOnMainThread()
 
         // Only mark the app as ready once.
-        guard !AppReadiness.isAppReady() else { return }
+        guard !AppReadiness.isAppReady else { return }
 
         // App isn't ready until storage is ready AND all version migrations are complete.
         guard storageCoordinator.isStorageReady && areVersionMigrationsComplete else { return }
@@ -169,7 +169,7 @@ class NotificationService: UNNotificationServiceExtension {
         // Note that this does much more than set a flag; it will also run all deferred blocks.
         AppReadiness.setAppIsReady()
 
-        AppVersion.sharedInstance().nseLaunchDidComplete()
+        AppVersion.shared().nseLaunchDidComplete()
     }
 
     func askMainAppToHandleReceipt(handledCallback: @escaping (_ mainAppHandledReceipt: Bool) -> Void) {
@@ -238,10 +238,11 @@ class NotificationService: UNNotificationServiceExtension {
     }
 
     private let isProcessingMessages = AtomicBool(false)
+
     func fetchAndProcessMessages() {
         AssertIsOnMainThread()
 
-        guard !AppExpiry.isExpired else {
+        guard !AppExpiry.shared.isExpired else {
             owsFailDebug("Not processing notifications for expired application.")
             return completeSilenty()
         }
@@ -251,11 +252,13 @@ class NotificationService: UNNotificationServiceExtension {
         Logger.info("Beginning message fetch.")
 
         messageFetcherJob.run().promise.then {
-            return self.messageProcessing.flushMessageDecryptionAndProcessingPromise().asVoid()
+            return self.messageProcessor.processingCompletePromise()
         }.ensure {
             Logger.info("Message fetch completed.")
             self.isProcessingMessages.set(false)
             self.completeSilenty()
-        }.retainUntilComplete()
+        }.catch { error in
+            Logger.warn("Error: \(error)")
+        }
     }
 }

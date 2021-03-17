@@ -10,7 +10,9 @@ public protocol ThreadFinder {
 
     func visibleThreadCount(isArchived: Bool, transaction: ReadTransaction) throws -> UInt
     func enumerateVisibleThreads(isArchived: Bool, transaction: ReadTransaction, block: @escaping (TSThread) -> Void) throws
+    func visibleThreadIds(isArchived: Bool, transaction: ReadTransaction) throws -> [String]
     func sortIndex(thread: TSThread, transaction: ReadTransaction) throws -> UInt?
+    func threads(withThreadIds threadIds: Set<String>, transaction: ReadTransaction) throws -> Set<TSThread>
 }
 
 @objc
@@ -40,6 +42,16 @@ public class AnyThreadFinder: NSObject, ThreadFinder {
     }
 
     @objc
+    public func visibleThreadIds(isArchived: Bool, transaction: SDSAnyReadTransaction) throws -> [String] {
+        switch transaction.readTransaction {
+        case .grdbRead(let grdb):
+            return try grdbAdapter.visibleThreadIds(isArchived: isArchived, transaction: grdb)
+        case .yapRead(let yap):
+            return try yapAdapter.visibleThreadIds(isArchived: isArchived, transaction: yap)
+        }
+    }
+
+    @objc
     public func sortIndexObjc(thread: TSThread, transaction: ReadTransaction) -> NSNumber? {
         do {
             guard let value = try sortIndex(thread: thread, transaction: transaction) else {
@@ -58,6 +70,15 @@ public class AnyThreadFinder: NSObject, ThreadFinder {
             return try grdbAdapter.sortIndex(thread: thread, transaction: grdb)
         case .yapRead(let yap):
             return yapAdapter.sortIndex(thread: thread, transaction: yap)
+        }
+    }
+
+    public func threads(withThreadIds threadIds: Set<String>, transaction: SDSAnyReadTransaction) throws -> Set<TSThread> {
+        switch transaction.readTransaction {
+        case .grdbRead(let grdb):
+            return try grdbAdapter.threads(withThreadIds: threadIds, transaction: grdb)
+        case .yapRead(let yap):
+            return try yapAdapter.threads(withThreadIds: threadIds, transaction: yap)
         }
     }
 }
@@ -85,6 +106,10 @@ struct YAPDBThreadFinder: ThreadFinder {
                                             }
                                             block(thread)
         }
+    }
+
+    func visibleThreadIds(isArchived: Bool, transaction: YapDatabaseReadTransaction) throws -> [String] {
+        throw OWSAssertionError("Not implemented.")
     }
 
     func sortIndex(thread: TSThread, transaction: YapDatabaseReadTransaction) -> UInt? {
@@ -115,6 +140,10 @@ struct YAPDBThreadFinder: ThreadFinder {
         } else {
             return nil
         }
+    }
+
+    func threads(withThreadIds threadIds: Set<String>, transaction: YapDatabaseReadTransaction) throws -> Set<TSThread> {
+        throw OWSAssertionError("Not implemented.")
     }
 
     // MARK: -
@@ -170,6 +199,21 @@ public class GRDBThreadFinder: NSObject, ThreadFinder {
         }
     }
 
+    @objc
+    public func visibleThreadIds(isArchived: Bool, transaction: GRDBReadTransaction) throws -> [String] {
+        let sql = """
+        SELECT \(threadColumn: .uniqueId)
+        FROM \(ThreadRecord.databaseTableName)
+        WHERE \(threadColumn: .shouldThreadBeVisible) = 1
+        AND \(threadColumn: .isArchived) = ?
+        ORDER BY \(threadColumn: .lastInteractionRowId) DESC
+        """
+        let arguments: StatementArguments = [isArchived]
+        return try String.fetchAll(transaction.database,
+                                   sql: sql,
+                                   arguments: arguments)
+    }
+
     public func sortIndex(thread: TSThread, transaction: GRDBReadTransaction) throws -> UInt? {
         let sql = """
         SELECT sortIndex
@@ -191,9 +235,50 @@ public class GRDBThreadFinder: NSObject, ThreadFinder {
     }
 
     @objc
+    public class func isPreMessageRequestsThread(_ thread: TSThread, transaction: GRDBReadTransaction) -> Bool {
+        guard !RemoteConfig.profilesForAll else { return false }
+
+        // Grandfather legacy threads where you haven't shared your profile.
+        guard !thread.isNoteToSelf else { return false }
+
+        let interactionFinder = GRDBInteractionFinder(threadUniqueId: thread.uniqueId)
+
+        // We don't want to show message requests for threads that existed before we
+        // enabled the feature. In order to make sure this is the case, we record
+        // the max row id from the interactions table when the feature is turned on.
+        // If the current thread contains messages that are earlier than that id,
+        // we don't show the message request.
+        if let messageRequestInteractionIdEpoch = SSKPreferences.messageRequestInteractionIdEpoch(transaction: transaction),
+            let earliestKnownInteractionId = interactionFinder.earliestKnownInteractionRowId(transaction: transaction),
+            earliestKnownInteractionId <= messageRequestInteractionIdEpoch {
+            return true
+        }
+
+        // It's possible we pass the above check for a legacy thread, for example if
+        // you have a strict disappearing message timer enabled that deletes all the
+        // messages before the epoch. As an additional safe guard, we treat the thread
+        // as pre-message requests if you've ever sent an outgoing message AND you have
+        // not shared your profile since that shouldn't be possible in a message request
+        // world.
+        let hasSentMessages = interactionFinder.existsOutgoingMessage(transaction: transaction)
+
+        let threadIsWhitelisted = SSKEnvironment.shared.profileManager.isThread(
+            inProfileWhitelist: thread,
+            transaction: transaction.asAnyRead
+        )
+
+        return hasSentMessages && !threadIsWhitelisted
+    }
+
+    @objc
     public class func hasPendingMessageRequest(thread: TSThread, transaction: GRDBReadTransaction) -> Bool {
-        // If the feature isn't enabled, do nothing.
-        guard RemoteConfig.messageRequests else { return false }
+
+        // TODO: Should we consult isRequestingMember() here?
+        if let groupThread = thread as? TSGroupThread,
+            groupThread.isGroupV2Thread,
+            groupThread.isLocalUserInvitedMember {
+            return true
+        }
 
         // If we're creating the thread, don't show the message request view
         guard thread.shouldThreadBeVisible else { return false }
@@ -203,7 +288,7 @@ public class GRDBThreadFinder: NSObject, ThreadFinder {
         if OWSBlockingManager.shared().isThreadBlocked(thread) { return true }
 
         let isGroupThread = thread is TSGroupThread
-        let isLocalUserInGroup = (thread as? TSGroupThread)?.isLocalUserInGroup() == true
+        let isLocalUserInGroup = (thread as? TSGroupThread)?.isLocalUserFullOrInvitedMember == true
 
         // If this is a group thread and we're not a member, never show the message request.
         if isGroupThread, !isLocalUserInGroup { return false }
@@ -215,18 +300,11 @@ public class GRDBThreadFinder: NSObject, ThreadFinder {
             transaction: transaction.asAnyRead
         ) else { return false }
 
-        if let messageRequestInteractionIdEpoch = SSKPreferences.messageRequestInteractionIdEpoch(transaction: transaction) {
-            guard thread.lastInteractionRowId > messageRequestInteractionIdEpoch else {
-                return false
-            }
-        } else {
-            owsFailDebug("messageRequestInteractionIdEpoch was unexpectedly nil though RemoteConfig.messageRequests was true")
-        }
+        // If this thread is from before we supported message requests,
+        // don't show the message request view.
+        guard !isPreMessageRequestsThread(thread, transaction: transaction) else { return false }
 
         let interactionFinder = GRDBInteractionFinder(threadUniqueId: thread.uniqueId)
-
-        let hasSentMessages = interactionFinder.existsOutgoingMessage(transaction: transaction)
-        guard !hasSentMessages || FeatureFlags.phoneNumberPrivacy else { return false }
 
         if isGroupThread {
             // At this point, we know this is an un-whitelisted group thread.
@@ -243,5 +321,24 @@ public class GRDBThreadFinder: NSObject, ThreadFinder {
         guard interactionFinder.possiblyHasIncomingMessages(transaction: transaction) else { return false }
 
         return true
+    }
+
+    @objc
+    public func threads(withThreadIds threadIds: Set<String>, transaction: GRDBReadTransaction) throws -> Set<TSThread> {
+        guard !threadIds.isEmpty else {
+            return []
+        }
+
+        let sql = """
+        SELECT * FROM \(ThreadRecord.databaseTableName)
+        WHERE \(threadColumn: .uniqueId) IN (\(threadIds.map { "\'\($0)'" }.joined(separator: ",")))
+        """
+        let arguments: StatementArguments = []
+        let cursor = TSThread.grdbFetchCursor(sql: sql, arguments: arguments, transaction: transaction)
+        var threads = Set<TSThread>()
+        while let thread = try cursor.next() {
+            threads.insert(thread)
+        }
+        return threads
     }
 }

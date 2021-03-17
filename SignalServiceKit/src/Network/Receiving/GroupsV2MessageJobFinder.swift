@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 import Foundation
@@ -11,9 +11,33 @@ public class GRDBGroupsV2MessageJobFinder: NSObject {
     typealias WriteTransaction = GRDBWriteTransaction
 
     @objc
-    public func addJob(envelopeData: Data, plaintextData: Data?, wasReceivedByUD: Bool, transaction: GRDBWriteTransaction) {
-        let job = IncomingGroupsV2MessageJob(envelopeData: envelopeData, plaintextData: plaintextData, wasReceivedByUD: wasReceivedByUD)
+    public func addJob(envelopeData: Data,
+                       plaintextData: Data?,
+                       groupId: Data,
+                       wasReceivedByUD: Bool,
+                       serverDeliveryTimestamp: UInt64,
+                       transaction: GRDBWriteTransaction) {
+        let job = IncomingGroupsV2MessageJob(envelopeData: envelopeData,
+                                             plaintextData: plaintextData,
+                                             groupId: groupId,
+                                             wasReceivedByUD: wasReceivedByUD,
+                                             serverDeliveryTimestamp: serverDeliveryTimestamp)
         job.anyInsert(transaction: transaction.asAnyWrite)
+    }
+
+    @objc
+    public func allEnqueuedGroupIds(transaction: GRDBReadTransaction) -> [Data] {
+        let sql = """
+            SELECT DISTINCT \(incomingGroupsV2MessageJobColumn: .groupId)
+            FROM \(IncomingGroupsV2MessageJobRecord.databaseTableName)
+        """
+        var result = [Data]()
+        do {
+            result = try Data.fetchAll(transaction.database, sql: sql)
+        } catch {
+            owsFailDebug("error: \(error)")
+        }
+        return result
     }
 
     @objc
@@ -28,6 +52,45 @@ public class GRDBGroupsV2MessageJobFinder: NSObject {
                                                                 transaction: transaction)
 
         return try! cursor.all()
+    }
+
+    @objc
+    public func nextJobs(forGroupId groupId: Data,
+                         batchSize: UInt,
+                         transaction: GRDBReadTransaction) -> [IncomingGroupsV2MessageJob] {
+        let sql = """
+            SELECT *
+            FROM \(IncomingGroupsV2MessageJobRecord.databaseTableName)
+            WHERE \(incomingGroupsV2MessageJobColumn: .groupId) = ?
+            ORDER BY \(incomingGroupsV2MessageJobColumn: .id)
+            LIMIT \(batchSize)
+        """
+        let cursor = IncomingGroupsV2MessageJob.grdbFetchCursor(sql: sql,
+                                                                arguments: [groupId],
+                                                                transaction: transaction)
+
+        return try! cursor.all()
+    }
+
+    @objc
+    public func existsJob(forGroupId groupId: Data, transaction: GRDBReadTransaction) -> Bool {
+        let sql = """
+            SELECT EXISTS (
+                SELECT 1 FROM \(IncomingGroupsV2MessageJobRecord.databaseTableName)
+                WHERE \(incomingGroupsV2MessageJobColumn: .groupId) = ?
+            )
+        """
+        return try! Bool.fetchOne(transaction.database, sql: sql, arguments: [groupId]) ?? false
+    }
+
+    @objc
+    public func jobCount(forGroupId groupId: Data, transaction: GRDBReadTransaction) -> UInt {
+        let sql = """
+            SELECT COUNT(*)
+            FROM \(IncomingGroupsV2MessageJobRecord.databaseTableName)
+            WHERE \(incomingGroupsV2MessageJobColumn: .groupId) = ?
+        """
+        return try! UInt.fetchOne(transaction.database, sql: sql, arguments: [groupId]) ?? 0
     }
 
     @objc

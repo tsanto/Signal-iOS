@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2019 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 import Foundation
@@ -11,16 +11,6 @@ protocol ConversationSearchViewDelegate: class {
 
 @objc
 class ConversationSearchViewController: UITableViewController, BlockListCacheDelegate {
-
-    // MARK: - Dependencies
-
-    private var databaseStorage: SDSDatabaseStorage {
-        return SDSDatabaseStorage.shared
-    }
-
-    private var contactsManager: OWSContactsManager {
-        return Environment.shared.contactsManager
-    }
 
     // MARK: -
 
@@ -77,7 +67,7 @@ class ConversationSearchViewController: UITableViewController, BlockListCacheDel
         tableView.register(ConversationListCell.self, forCellReuseIdentifier: ConversationListCell.cellReuseIdentifier())
         tableView.register(ContactTableViewCell.self, forCellReuseIdentifier: ContactTableViewCell.reuseIdentifier())
 
-        databaseStorage.add(databaseStorageObserver: self)
+        databaseStorage.appendUIDatabaseSnapshotDelegate(self)
 
         NotificationCenter.default.addObserver(self,
                                                selector: #selector(themeDidChange),
@@ -237,11 +227,13 @@ class ConversationSearchViewController: UITableViewController, BlockListCacheDel
                 return UITableViewCell()
             }
 
+            cell.setUseLargeAvatars()
+
             guard let searchResult = self.searchResultSet.contacts[safe: indexPath.row] else {
                 owsFailDebug("searchResult was unexpectedly nil")
                 return UITableViewCell()
             }
-            cell.configure(withRecipientAddress: searchResult.signalAccount.recipientAddress)
+            cell.configureWithSneakyTransaction(recipientAddress: searchResult.signalAccount.recipientAddress)
             return cell
         case .messages:
             guard let cell = tableView.dequeueReusableCell(withIdentifier: ConversationListCell.cellReuseIdentifier()) as? ConversationListCell else {
@@ -305,7 +297,7 @@ class ConversationSearchViewController: UITableViewController, BlockListCacheDel
         let label = UILabel()
         label.textColor = Theme.secondaryTextAndIconColor
         label.text = title
-        label.font = UIFont.ows_dynamicTypeBody.ows_semibold()
+        label.font = UIFont.ows_dynamicTypeBody.ows_semibold
         label.tag = section
 
         let wrapper = UIView()
@@ -480,20 +472,29 @@ class EmptySearchResultCell: UITableViewCell {
 
 // MARK: -
 
-extension ConversationSearchViewController: SDSDatabaseStorageObserver {
-    func databaseStorageDidUpdate(change: SDSDatabaseStorageChange) {
+extension ConversationSearchViewController: UIDatabaseSnapshotDelegate {
+
+    func uiDatabaseSnapshotWillUpdate() {
+        AssertIsOnMainThread()
+    }
+
+    func uiDatabaseSnapshotDidUpdate(databaseChanges: UIDatabaseChanges) {
+        AssertIsOnMainThread()
+
+        guard databaseChanges.didUpdateThreads || databaseChanges.didUpdateInteractions else {
+            return
+        }
+
+        refreshSearchResults()
+    }
+
+    func uiDatabaseSnapshotDidUpdateExternally() {
         AssertIsOnMainThread()
 
         refreshSearchResults()
     }
 
-    func databaseStorageDidUpdateExternally() {
-        AssertIsOnMainThread()
-
-        refreshSearchResults()
-    }
-
-    func databaseStorageDidReset() {
+    func uiDatabaseSnapshotDidReset() {
         AssertIsOnMainThread()
 
         refreshSearchResults()

@@ -29,7 +29,7 @@ NS_ASSUME_NONNULL_BEGIN
     OWSAssertDebug([thread.uniqueId isEqualToString:message.uniqueThreadId]);
     OWSAssertDebug(emoji.isSingleEmoji);
 
-    TSOutgoingMessageBuilder *messageBuilder = [[TSOutgoingMessageBuilder alloc] initWithThread:thread];
+    TSOutgoingMessageBuilder *messageBuilder = [TSOutgoingMessageBuilder outgoingMessageBuilderWithThread:thread];
     messageBuilder.expiresInSeconds = expiresInSeconds;
     self = [super initOutgoingMessageWithBuilder:messageBuilder];
     if (!self) {
@@ -58,12 +58,13 @@ NS_ASSUME_NONNULL_BEGIN
     }
 
     SSKProtoDataMessageReactionBuilder *reactionBuilder =
-        [SSKProtoDataMessageReaction builderWithEmoji:self.emoji remove:self.isRemoving timestamp:message.timestamp];
+        [SSKProtoDataMessageReaction builderWithEmoji:self.emoji timestamp:message.timestamp];
+    [reactionBuilder setRemove:self.isRemoving];
 
     SignalServiceAddress *_Nullable messageAuthor;
 
     if ([message isKindOfClass:[TSOutgoingMessage class]]) {
-        messageAuthor = TSAccountManager.sharedInstance.localAddress;
+        messageAuthor = TSAccountManager.shared.localAddress;
     } else if ([message isKindOfClass:[TSIncomingMessage class]]) {
         messageAuthor = ((TSIncomingMessage *)message).authorAddress;
     }
@@ -73,12 +74,14 @@ NS_ASSUME_NONNULL_BEGIN
         return nil;
     }
 
-    if (messageAuthor.phoneNumber) {
+    if (messageAuthor.phoneNumber && !SSKFeatureFlags.phoneNumberSharing) {
         reactionBuilder.authorE164 = messageAuthor.phoneNumber;
     }
 
     if (messageAuthor.uuidString) {
         reactionBuilder.authorUuid = messageAuthor.uuidString;
+    } else {
+        OWSAssertDebug(!SSKFeatureFlags.phoneNumberSharing);
     }
 
     NSError *error;
@@ -107,7 +110,7 @@ NS_ASSUME_NONNULL_BEGIN
         return;
     }
 
-    SignalServiceAddress *_Nullable localAddress = TSAccountManager.sharedInstance.localAddress;
+    SignalServiceAddress *_Nullable localAddress = TSAccountManager.shared.localAddress;
     if (!localAddress) {
         OWSFailDebug(@"unexpectedly missing local address");
         return;

@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 import Foundation
@@ -13,9 +13,11 @@ class NotificationServiceExtensionContext: NSObject, AppContext {
     func isInBackground() -> Bool { true }
     func isAppForegroundAndActive() -> Bool { false }
     func mainApplicationStateOnLaunch() -> UIApplication.State { .inactive }
-
     var shouldProcessIncomingMessages: Bool { true }
+    var hasUI: Bool { false }
     func canPresentNotifications() -> Bool { true }
+    var didLastLaunchNotTerminate: Bool { false }
+    var hasActiveCall: Bool { false }
 
     let appLaunchTime = Date()
     lazy var buildTime: Date = {
@@ -81,9 +83,14 @@ class NotificationServiceExtensionContext: NSObject, AppContext {
     func setStatusBarHidden(_ isHidden: Bool, animated isAnimated: Bool) {}
 
     func frontmostViewController() -> UIViewController? { nil }
+    func openSystemSettings() {}
     func openSystemSettingsAction(completion: (() -> Void)? = nil) -> ActionSheetAction? { nil }
 
     func setNetworkActivityIndicatorVisible(_ value: Bool) {}
 
     func runNowOr(whenMainAppIsActive block: @escaping AppActiveBlock) {}
+
+    var debugLogsDirPath: String {
+        DebugLogger.nseDebugLogsDirPath
+    }
 }

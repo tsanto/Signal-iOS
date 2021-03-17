@@ -31,14 +31,9 @@ class AttachmentCaptionViewController: OWSViewController {
         self.attachmentApprovalItem = attachmentApprovalItem
         self.originalCaptionText = attachmentApprovalItem.captionText
 
-        super.init(nibName: nil, bundle: nil)
+        super.init()
 
         self.addObserver(textView, forKeyPath: "contentSize", options: .new, context: nil)
-    }
-
-    @available(*, unavailable, message: "use other init() instead.")
-    required public init?(coder aDecoder: NSCoder) {
-        notImplemented()
     }
 
     deinit {
@@ -232,7 +227,7 @@ class AttachmentCaptionViewController: OWSViewController {
             return
         }
 
-        let contentSize = textView.sizeThatFits(CGSize(width: textView.width(), height: CGFloat.greatestFiniteMagnitude))
+        let contentSize = textView.sizeThatFits(CGSize(width: textView.width, height: CGFloat.greatestFiniteMagnitude))
 
         // `textView.contentSize` isn't accurate when restoring a multiline draft, so we compute it here.
         textView.contentSize = contentSize

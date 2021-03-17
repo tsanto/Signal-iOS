@@ -9,7 +9,7 @@ public class MessageRequestReadReceipts: NSObject, PendingReadReceiptRecorder {
 
     override init() {
         super.init()
-        AppReadiness.runNowOrWhenAppDidBecomeReady {
+        AppReadiness.runNowOrWhenAppDidBecomeReadyAsync {
             NotificationCenter.default.addObserver(self,
                                                    selector: #selector(self.profileWhitelistDidChange(notification:)),
                                                    name: .profileWhitelistDidChange,
@@ -22,6 +22,10 @@ public class MessageRequestReadReceipts: NSObject, PendingReadReceiptRecorder {
     }
 
     // MARK: - Depenencies
+
+    var databaseStorage: SDSDatabaseStorage {
+        return SSKEnvironment.shared.databaseStorage
+    }
 
     var grdbStorage: GRDBDatabaseStorageAdapter {
         return SDSDatabaseStorage.shared.grdbStorage
@@ -83,7 +87,7 @@ public class MessageRequestReadReceipts: NSObject, PendingReadReceiptRecorder {
     private func sendAnyReadyReceipts(threads: [TSThread], transaction: GRDBReadTransaction) throws {
         let pendingReceipts: [PendingReadReceiptRecord] = try threads.flatMap { thread -> [PendingReadReceiptRecord] in
             guard !thread.hasPendingMessageRequest(transaction: transaction) else {
-                Logger.debug("aborting since there is still a pending message request for thread: \(thread)")
+                Logger.debug("aborting since there is still a pending message request for thread: \(thread.uniqueId)")
                 return []
             }
 
@@ -91,15 +95,13 @@ public class MessageRequestReadReceipts: NSObject, PendingReadReceiptRecorder {
         }
 
         guard !pendingReceipts.isEmpty else {
-            Logger.debug("aborting since pendingReceipts is empty for threads: \(threads)")
+            Logger.debug("aborting since pendingReceipts is empty for threads: \(threads.count)")
             return
         }
 
-        DispatchQueue.global().async {
+        databaseStorage.asyncWrite { transaction in
             do {
-                try self.grdbStorage.write { transaction in
-                    try self.enqueue(pendingReceipts: pendingReceipts, transaction: transaction)
-                }
+                try self.enqueue(pendingReceipts: pendingReceipts, transaction: transaction.unwrapGrdbWrite)
             } catch {
                 owsFailDebug("error: \(error)")
             }
@@ -109,7 +111,7 @@ public class MessageRequestReadReceipts: NSObject, PendingReadReceiptRecorder {
     private func removeAnyReadyReceipts(threads: [TSThread], transaction: GRDBReadTransaction) throws {
         let pendingReceipts: [PendingReadReceiptRecord] = try threads.flatMap { thread -> [PendingReadReceiptRecord] in
             guard !thread.hasPendingMessageRequest(transaction: transaction) else {
-                Logger.debug("aborting since there is still a pending message request for thread: \(thread)")
+                Logger.debug("aborting since there is still a pending message request for thread: \(thread.uniqueId)")
                 return []
             }
 
@@ -117,15 +119,13 @@ public class MessageRequestReadReceipts: NSObject, PendingReadReceiptRecorder {
         }
 
         guard !pendingReceipts.isEmpty else {
-            Logger.debug("aborting since pendingReceipts is empty for threads: \(threads)")
+            Logger.debug("aborting since pendingReceipts is empty for threads: \(threads.count)")
             return
         }
 
-        DispatchQueue.global().async {
+        self.databaseStorage.asyncWrite { transaction in
             do {
-                try self.grdbStorage.write { transaction in
-                    try self.finder.delete(pendingReceipts: pendingReceipts, transaction: transaction)
-                }
+                try self.finder.delete(pendingReceipts: pendingReceipts, transaction: transaction.unwrapGrdbWrite)
             } catch {
                 owsFailDebug("error: \(error)")
             }

@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import "OWSGroupsOutputStream.h"
@@ -8,6 +8,7 @@
 #import "OWSDisappearingMessagesConfiguration.h"
 #import "TSGroupModel.h"
 #import "TSGroupThread.h"
+#import <SignalServiceKit/NSData+Image.h>
 #import <SignalServiceKit/SignalServiceKit-Swift.h>
 
 NS_ASSUME_NONNULL_BEGIN
@@ -33,23 +34,26 @@ NS_ASSUME_NONNULL_BEGIN
     NSMutableArray *members = [NSMutableArray new];
 
     for (SignalServiceAddress *address in [GroupMembership normalize:group.groupMembers]) {
-        // We currently include an independent group member list
-        // of just the phone numbers to support older pre-UUID
-        // clients. Eventually we probably want to remove this.
         if (address.phoneNumber) {
             [membersE164 addObject:address.phoneNumber];
-        }
 
-        SSKProtoGroupDetailsMemberBuilder *memberBuilder = [SSKProtoGroupDetailsMember builder];
-        memberBuilder.uuid = address.uuidString;
-        memberBuilder.e164 = address.phoneNumber;
+            // Newer desktops only know how to handle the "pairing"
+            // fields that we rolled back when implementing UUID
+            // trust. We need to continue populating them with
+            // phone number only to make sure desktop can see
+            // group membership.
+            SSKProtoGroupDetailsMemberBuilder *memberBuilder = [SSKProtoGroupDetailsMember builder];
+            memberBuilder.e164 = address.phoneNumber;
 
-        NSError *error;
-        SSKProtoGroupDetailsMember *_Nullable member = [memberBuilder buildAndReturnError:&error];
-        if (error || !member) {
-            OWSFailDebug(@"could not build members protobuf: %@", error);
+            NSError *error;
+            SSKProtoGroupDetailsMember *_Nullable member = [memberBuilder buildAndReturnError:&error];
+            if (error || !member) {
+                OWSFailDebug(@"could not build members protobuf: %@", error);
+            } else {
+                [members addObject:member];
+            }
         } else {
-            [members addObject:member];
+            OWSFailDebug(@"Unexpectedly have a UUID only member in a v1 group, ignoring %@", address);
         }
     }
 
@@ -58,7 +62,7 @@ NS_ASSUME_NONNULL_BEGIN
 
     [groupBuilder setColor:groupThread.conversationColorName];
 
-    if ([OWSBlockingManager.sharedManager isGroupIdBlocked:group.groupId]) {
+    if ([OWSBlockingManager.shared isGroupIdBlocked:group.groupId]) {
         [groupBuilder setBlocked:YES];
     }
 
@@ -74,7 +78,11 @@ NS_ASSUME_NONNULL_BEGIN
     if (group.groupAvatarData.length > 0) {
         SSKProtoGroupDetailsAvatarBuilder *avatarBuilder = [SSKProtoGroupDetailsAvatar builder];
 
-        [avatarBuilder setContentType:OWSMimeTypeImagePng];
+        OWSAssertDebug([TSGroupModel isValidGroupAvatarData:group.groupAvatarData]);
+        ImageFormat format = [group.groupAvatarData imageMetadataWithPath:nil mimeType:nil].imageFormat;
+        NSString *mimeType = (format == ImageFormat_Png) ? OWSMimeTypeImagePng : OWSMimeTypeImageJpeg;
+
+        [avatarBuilder setContentType:mimeType];
         groupAvatarData = group.groupAvatarData;
         [avatarBuilder setLength:(uint32_t)groupAvatarData.length];
 

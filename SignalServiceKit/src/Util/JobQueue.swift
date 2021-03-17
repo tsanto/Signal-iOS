@@ -42,7 +42,7 @@ public enum JobError: Error {
     case obsolete(description: String)
 }
 
-public protocol DurableOperation: class {
+public protocol DurableOperation: class, Equatable {
     associatedtype JobRecordType: SSKJobRecord
     associatedtype DurableOperationDelegateType: DurableOperationDelegate
 
@@ -138,7 +138,7 @@ public extension JobQueue {
             return
         }
 
-        AppReadiness.runNowOrWhenAppDidBecomeReady {
+        AppReadiness.runNowOrWhenAppDidBecomeReadyAsync {
             guard self.isSetup.get() else {
                 return
             }
@@ -246,7 +246,7 @@ public extension JobQueue {
                 return
             }
             if self.requiresInternet {
-                NotificationCenter.default.addObserver(forName: .reachabilityChanged,
+                NotificationCenter.default.addObserver(forName: SSKReachability.owsReachabilityDidChange,
                                                        object: self.reachabilityManager.observationContext,
                                                        queue: nil) { _ in
 
@@ -261,7 +261,7 @@ public extension JobQueue {
 
             self.isSetup.set(true)
             self.startWorkWhenAppIsReady()
-        }.retainUntilComplete()
+        }
     }
 
     func remainingRetries(durableOperation: DurableOperationType) -> UInt {

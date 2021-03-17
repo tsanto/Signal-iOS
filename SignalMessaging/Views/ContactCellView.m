@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import "ContactCellView.h"
@@ -23,13 +23,13 @@ const CGFloat kContactCellAvatarTextMargin = 12;
 @property (nonatomic) UILabel *nameLabel;
 @property (nonatomic) UIImageView *avatarView;
 @property (nonatomic) UILabel *subtitleLabel;
-@property (nonatomic) UILabel *profileNameLabel;
 @property (nonatomic) UILabel *accessoryLabel;
 @property (nonatomic) UIStackView *nameContainerView;
 @property (nonatomic) UIView *accessoryViewContainer;
 
 @property (nonatomic, nullable) TSThread *thread;
 @property (nonatomic) SignalServiceAddress *address;
+@property (nonatomic, nullable) NSArray<NSLayoutConstraint *> *layoutConstraints;
 
 @end
 
@@ -66,6 +66,11 @@ const CGFloat kContactCellAvatarTextMargin = 12;
     return SSKEnvironment.shared.tsAccountManager;
 }
 
+- (OWSProfileManager *)profileManager
+{
+    return [OWSProfileManager shared];
+}
+
 #pragma mark -
 
 - (void)configure
@@ -75,15 +80,11 @@ const CGFloat kContactCellAvatarTextMargin = 12;
     self.layoutMargins = UIEdgeInsetsZero;
 
     _avatarView = [AvatarImageView new];
-    [_avatarView autoSetDimension:ALDimensionWidth toSize:kStandardAvatarSize];
-    [_avatarView autoSetDimension:ALDimensionHeight toSize:kStandardAvatarSize];
 
     self.nameLabel = [UILabel new];
     self.nameLabel.lineBreakMode = NSLineBreakByTruncatingTail;
 
     self.subtitleLabel = [UILabel new];
-
-    self.profileNameLabel = [UILabel new];
 
     self.accessoryLabel = [[UILabel alloc] init];
     self.accessoryLabel.textAlignment = NSTextAlignmentRight;
@@ -92,7 +93,6 @@ const CGFloat kContactCellAvatarTextMargin = 12;
 
     self.nameContainerView = [[UIStackView alloc] initWithArrangedSubviews:@[
         self.nameLabel,
-        self.profileNameLabel,
         self.subtitleLabel,
     ]];
     self.nameContainerView.axis = UILayoutConstraintAxisVertical;
@@ -113,18 +113,30 @@ const CGFloat kContactCellAvatarTextMargin = 12;
 
 - (void)configureFontsAndColors
 {
-    self.nameLabel.font = [UIFont ows_dynamicTypeBodyFont];
-    self.profileNameLabel.font = [UIFont ows_regularFontWithSize:11.f];
-    self.subtitleLabel.font = [UIFont ows_regularFontWithSize:11.f];
-    self.accessoryLabel.font = [UIFont ows_semiboldFontWithSize:13.f];
+    self.nameLabel.font = OWSTableItem.primaryLabelFont;
+    self.subtitleLabel.font = [UIFont ows_dynamicTypeCaption1ClampedFont];
+    self.accessoryLabel.font = [UIFont ows_dynamicTypeSubheadlineClampedFont];
 
-    self.nameLabel.textColor = Theme.primaryTextColor;
-    self.profileNameLabel.textColor = Theme.secondaryTextAndIconColor;
-    self.subtitleLabel.textColor = Theme.secondaryTextAndIconColor;
-    self.accessoryLabel.textColor = Theme.middleGrayColor;
+    self.nameLabel.textColor = self.forceDarkAppearance ? Theme.darkThemePrimaryColor : Theme.primaryTextColor;
+    self.subtitleLabel.textColor
+        = self.forceDarkAppearance ? Theme.darkThemeSecondaryTextAndIconColor : Theme.secondaryTextAndIconColor;
+    self.accessoryLabel.textColor = Theme.isDarkThemeEnabled ? UIColor.ows_gray25Color : UIColor.ows_gray45Color;
+
+    if (self.nameLabel.attributedText.string.length > 0) {
+        NSString *nameLabelText = self.nameLabel.attributedText.string;
+        NSDictionary *updatedAttributes = @{ NSForegroundColorAttributeName : self.nameLabel.textColor };
+        self.nameLabel.attributedText = [[NSAttributedString alloc] initWithString:nameLabelText
+                                                                        attributes:updatedAttributes];
+    }
 }
 
-- (void)configureWithRecipientAddress:(SignalServiceAddress *)address
+- (void)configureWithRecipientAddressWithSneakyTransaction:(SignalServiceAddress *)address
+{
+    [self.databaseStorage uiReadWithBlock:^(
+        SDSAnyReadTransaction *transaction) { [self configureWithRecipientAddress:address transaction:transaction]; }];
+}
+
+- (void)configureWithRecipientAddress:(SignalServiceAddress *)address transaction:(SDSAnyReadTransaction *)transaction
 {
     OWSAssertDebug(address.isValid);
 
@@ -132,18 +144,14 @@ const CGFloat kContactCellAvatarTextMargin = 12;
     [self configureFontsAndColors];
 
     self.address = address;
-
-    // TODO remove sneaky transaction.
-    [self.databaseStorage readWithBlock:^(SDSAnyReadTransaction *transaction) {
-        self.thread = [TSContactThread getThreadWithContactAddress:address transaction:transaction];
-    }];
+    self.thread = [TSContactThread getThreadWithContactAddress:address transaction:transaction];
 
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(otherUsersProfileDidChange:)
                                                  name:kNSNotificationNameOtherUsersProfileDidChange
                                                object:nil];
-    [self updateProfileName];
-    [self updateAvatar];
+    [self updateNameLabels];
+    [self updateAvatarWithTransaction:transaction];
 
     if (self.accessoryMessage) {
         self.accessoryLabel.text = self.accessoryMessage;
@@ -162,18 +170,10 @@ const CGFloat kContactCellAvatarTextMargin = 12;
     // Update fonts to reflect changes to dynamic type.
     [self configureFontsAndColors];
 
-    NSString *threadName = [self.contactsManager displayNameForThread:thread transaction:transaction];
     TSContactThread *_Nullable contactThread;
     if ([self.thread isKindOfClass:[TSContactThread class]]) {
         contactThread = (TSContactThread *)self.thread;
     }
-
-    NSAttributedString *attributedText =
-        [[NSAttributedString alloc] initWithString:threadName
-                                        attributes:@{
-                                            NSForegroundColorAttributeName : Theme.primaryTextColor,
-                                        }];
-    self.nameLabel.attributedText = attributedText;
 
     if (contactThread != nil) {
         self.address = contactThread.contactAddress;
@@ -182,9 +182,21 @@ const CGFloat kContactCellAvatarTextMargin = 12;
                                                  selector:@selector(otherUsersProfileDidChange:)
                                                      name:kNSNotificationNameOtherUsersProfileDidChange
                                                    object:nil];
-        [self updateProfileName];
+        [self updateNameLabels];
+    } else {
+        NSString *threadName = [self.contactsManager displayNameForThread:thread transaction:transaction];
+        NSAttributedString *attributedText =
+            [[NSAttributedString alloc] initWithString:threadName
+                                            attributes:@{
+                                                NSForegroundColorAttributeName : self.nameLabel.textColor,
+                                            }];
+        self.nameLabel.attributedText = attributedText;
     }
-    self.avatarView.image = [OWSAvatarBuilder buildImageForThread:thread diameter:kStandardAvatarSize];
+
+    self.layoutConstraints = [self.avatarView autoSetDimensionsToSize:CGSizeMake(self.avatarSize, self.avatarSize)];
+    self.avatarView.image = [OWSAvatarBuilder buildImageForThread:thread
+                                                         diameter:self.avatarSize
+                                                      transaction:transaction];
 
     if (self.accessoryMessage) {
         self.accessoryLabel.text = self.accessoryMessage;
@@ -195,8 +207,15 @@ const CGFloat kContactCellAvatarTextMargin = 12;
     [self layoutSubviews];
 }
 
-- (void)updateAvatar
+- (void)updateAvatarWithTransaction:(SDSAnyReadTransaction *)transaction
 {
+    self.layoutConstraints = [self.avatarView autoSetDimensionsToSize:CGSizeMake(self.avatarSize, self.avatarSize)];
+
+    if (self.customAvatar != nil) {
+        self.avatarView.image = self.customAvatar;
+        return;
+    }
+
     SignalServiceAddress *address = self.address;
     if (!address.isValid) {
         OWSFailDebug(@"address should not be invalid");
@@ -214,23 +233,35 @@ const CGFloat kContactCellAvatarTextMargin = 12;
 
     OWSContactAvatarBuilder *avatarBuilder = [[OWSContactAvatarBuilder alloc] initWithAddress:address
                                                                                     colorName:colorName
-                                                                                     diameter:kStandardAvatarSize];
+                                                                                     diameter:self.avatarSize
+                                                                                  transaction:transaction];
 
     self.avatarView.image = [avatarBuilder build];
 }
 
-- (void)updateProfileName
+- (NSUInteger)avatarSize
 {
+    return self.useLargeAvatars ? kStandardAvatarSize : kSmallAvatarSize;
+}
+
+- (void)setForceDarkAppearance:(BOOL)forceDarkAppearance
+{
+    if (_forceDarkAppearance != forceDarkAppearance) {
+        _forceDarkAppearance = forceDarkAppearance;
+        [self configureFontsAndColors];
+    }
+}
+
+- (void)updateNameLabels
+{
+    BOOL hasCustomName = self.customName.length > 0;
     BOOL isNoteToSelf = IsNoteToSelfEnabled() && self.address.isLocalAddress;
-    if (isNoteToSelf) {
+    if (hasCustomName > 0) {
+        self.nameLabel.attributedText = self.customName;
+    } else if (isNoteToSelf) {
         self.nameLabel.text = MessageStrings.noteToSelf;
     } else {
         self.nameLabel.text = [self.contactsManager displayNameForAddress:self.address];
-    }
-
-    if (!RemoteConfig.messageRequests && ![self.contactsManager hasNameInSystemContactsForAddress:self.address]) {
-        self.profileNameLabel.text = [self.contactsManager formattedProfileNameForAddress:self.address];
-        [self.profileNameLabel setNeedsLayout];
     }
 
     [self.nameLabel setNeedsLayout];
@@ -240,15 +271,20 @@ const CGFloat kContactCellAvatarTextMargin = 12;
 {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 
+    self.forceDarkAppearance = NO;
     self.thread = nil;
     self.accessoryMessage = nil;
     self.nameLabel.text = nil;
     self.subtitleLabel.text = nil;
-    self.profileNameLabel.text = nil;
     self.accessoryLabel.text = nil;
+    self.customName = nil;
+    self.customAvatar = nil;
     for (UIView *subview in self.accessoryViewContainer.subviews) {
         [subview removeFromSuperview];
     }
+    [NSLayoutConstraint deactivateConstraints:self.layoutConstraints];
+    self.layoutConstraints = nil;
+    self.useLargeAvatars = NO;
 }
 
 - (void)otherUsersProfileDidChange:(NSNotification *)notification
@@ -259,30 +295,31 @@ const CGFloat kContactCellAvatarTextMargin = 12;
     OWSAssertDebug(address.isValid);
 
     if (address.isValid && [self.address isEqualToAddress:address]) {
-        [self updateProfileName];
-        [self updateAvatar];
+        [self updateNameLabels];
+        [self.databaseStorage
+            uiReadWithBlock:^(SDSAnyReadTransaction *transaction) { [self updateAvatarWithTransaction:transaction]; }];
     }
 }
 
 - (NSAttributedString *)verifiedSubtitle
 {
     NSMutableAttributedString *text = [NSMutableAttributedString new];
-    // "checkmark"
-    [text appendAttributedString:[[NSAttributedString alloc]
-                                     initWithString:@"\uf00c "
-                                         attributes:@{
-                                             NSFontAttributeName :
-                                                 [UIFont ows_fontAwesomeFont:self.subtitleLabel.font.pointSize],
-                                         }]];
-    [text appendAttributedString:[[NSAttributedString alloc]
-                                     initWithString:NSLocalizedString(@"PRIVACY_IDENTITY_IS_VERIFIED_BADGE",
-                                                        @"Badge indicating that the user is verified.")]];
+    [text appendTemplatedImageNamed:@"check-12" font:self.subtitleLabel.font];
+    [text append:@" " attributes:@{}];
+    [text append:NSLocalizedString(
+                     @"PRIVACY_IDENTITY_IS_VERIFIED_BADGE", @"Badge indicating that the user is verified.")
+        attributes:@{}];
     return [text copy];
 }
 
 - (void)setAttributedSubtitle:(nullable NSAttributedString *)attributedSubtitle
 {
     self.subtitleLabel.attributedText = attributedSubtitle;
+}
+
+- (void)setSubtitle:(nullable NSString *)subtitle
+{
+    [self setAttributedSubtitle:subtitle.asAttributedString];
 }
 
 - (BOOL)hasAccessoryText

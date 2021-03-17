@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 import Foundation
@@ -19,29 +19,44 @@ public class StickerHorizontalListViewItemSticker: NSObject, StickerHorizontalLi
     private let stickerInfo: StickerInfo
     public let didSelectBlock: () -> Void
     public let isSelectedBlock: () -> Bool
+    private weak var cache: NSCache<StickerInfo, StickerReusableView>?
 
     // This initializer can be used for cells which are never selected.
     @objc
-    public init(stickerInfo: StickerInfo, didSelectBlock: @escaping () -> Void) {
-        self.stickerInfo = stickerInfo
-        self.didSelectBlock = didSelectBlock
-        self.isSelectedBlock = {
-            false
-        }
+    public convenience init(stickerInfo: StickerInfo, didSelectBlock: @escaping () -> Void, cache: NSCache<StickerInfo, StickerReusableView>? = nil) {
+        self.init(stickerInfo: stickerInfo, didSelectBlock: didSelectBlock, isSelectedBlock: { false }, cache: cache)
     }
 
     @objc
-    public init(stickerInfo: StickerInfo, didSelectBlock: @escaping () -> Void, isSelectedBlock: @escaping () -> Bool) {
+    public init(stickerInfo: StickerInfo, didSelectBlock: @escaping () -> Void, isSelectedBlock: @escaping () -> Bool, cache: NSCache<StickerInfo, StickerReusableView>? = nil) {
         self.stickerInfo = stickerInfo
         self.didSelectBlock = didSelectBlock
         self.isSelectedBlock = isSelectedBlock
+        self.cache = cache
     }
 
-    public var view: UIView {
-        let view = StickerView(stickerInfo: stickerInfo)
-        view.layer.minificationFilter = .trilinear
+    private func reusableStickerView(forStickerInfo stickerInfo: StickerInfo) -> StickerReusableView {
+        let view: StickerReusableView = {
+            if let view = cache?.object(forKey: stickerInfo) { return view }
+            let view = StickerReusableView()
+            cache?.setObject(view, forKey: stickerInfo)
+            return view
+        }()
+
+        guard !view.hasStickerView else { return view }
+
+        guard let stickerView = StickerView.stickerView(forInstalledStickerInfo: stickerInfo) else {
+            view.showPlaceholder()
+            return view
+        }
+
+        stickerView.layer.minificationFilter = .trilinear
+        view.configure(with: stickerView)
+
         return view
     }
+
+    public var view: UIView { reusableStickerView(forStickerInfo: stickerInfo) }
 
     public var isSelected: Bool {
         return isSelectedBlock()
@@ -107,10 +122,11 @@ public class StickerHorizontalListView: UICollectionView {
     public required init(cellSize: CGFloat, cellInset: CGFloat, spacing: CGFloat) {
         self.cellSize = cellSize
         self.cellInset = cellInset
-        let layout = LinearHorizontalLayout(itemSize: CGSize(width: cellSize, height: cellSize), spacing: spacing)
+        let layout = LinearHorizontalLayout(itemSize: CGSize(square: cellSize), spacing: spacing)
 
         super.init(frame: .zero, collectionViewLayout: layout)
 
+        showsHorizontalScrollIndicator = false
         delegate = self
         dataSource = self
         register(UICollectionViewCell.self, forCellWithReuseIdentifier: cellReuseIdentifier)
@@ -120,8 +136,11 @@ public class StickerHorizontalListView: UICollectionView {
     }
 
     // Reload visible items to refresh the "selected" state
-    func updateSelections() {
-        reloadItems(at: indexPathsForVisibleItems)
+    func updateSelections(scrollToSelectedItem: Bool = false) {
+        reloadData()
+        guard scrollToSelectedItem else { return }
+        guard let (selectedIndex, _) = items.enumerated().first(where: { $1.isSelected }) else { return }
+        scrollToItem(at: IndexPath(row: selectedIndex, section: 0), at: .centeredHorizontally, animated: true)
     }
 
     required public init(coder: NSCoder) {
@@ -177,7 +196,7 @@ extension StickerHorizontalListView: UICollectionViewDataSource {
             let selectionView = UIView()
             selectionView.backgroundColor = (Theme.isDarkThemeEnabled
                 ? UIColor.ows_gray75
-                : UIColor.ows_gray10)
+                : UIColor.ows_gray15)
             selectionView.layer.cornerRadius = 8
             cell.contentView.addSubview(selectionView)
             selectionView.autoPinEdgesToSuperviewEdges()

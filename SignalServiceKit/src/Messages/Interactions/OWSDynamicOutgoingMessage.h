@@ -6,19 +6,17 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-@class SignalRecipient;
-
-typedef NSData *_Nonnull (^DynamicOutgoingMessageBlock)(SignalRecipient *);
+typedef NSData *_Nonnull (^DynamicOutgoingMessageBlock)(SignalServiceAddress *);
 
 /// This class is only used in debug tools
 @interface OWSDynamicOutgoingMessage : TSOutgoingMessage
 
 - (instancetype)initOutgoingMessageWithBuilder:(TSOutgoingMessageBuilder *)outgoingMessageBuilder NS_UNAVAILABLE;
 
-- (instancetype)initWithPlainTextDataBlock:(DynamicOutgoingMessageBlock)block thread:(TSThread *)thread;
-- (instancetype)initWithPlainTextDataBlock:(DynamicOutgoingMessageBlock)block
-                                 timestamp:(uint64_t)timestamp
-                                    thread:(TSThread *)thread;
+- (instancetype)initWithThread:(TSThread *)thread plainTextDataBlock:(DynamicOutgoingMessageBlock)block;
+- (instancetype)initWithThread:(TSThread *)thread
+                     timestamp:(uint64_t)timestamp
+            plainTextDataBlock:(DynamicOutgoingMessageBlock)block;
 
 @end
 

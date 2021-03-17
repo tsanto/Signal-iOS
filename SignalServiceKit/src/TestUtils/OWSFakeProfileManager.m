@@ -1,9 +1,10 @@
 //
-//  Copyright (c) 2020 Open Whisper Systems. All rights reserved.
+//  Copyright (c) 2021 Open Whisper Systems. All rights reserved.
 //
 
 #import "OWSFakeProfileManager.h"
 #import "TSThread.h"
+#import <PromiseKit/AnyPromise.h>
 #import <SignalCoreKit/Cryptography.h>
 #import <SignalCoreKit/NSData+OWS.h>
 #import <SignalServiceKit/SignalServiceKit-Swift.h>
@@ -31,7 +32,6 @@ NS_ASSUME_NONNULL_BEGIN
 @implementation OWSFakeProfileManager
 
 @synthesize localProfileKey = _localProfileKey;
-@synthesize userProfileReadCache = _userProfileReadCache;
 
 - (instancetype)init
 {
@@ -43,7 +43,6 @@ NS_ASSUME_NONNULL_BEGIN
     _profileKeys = [NSMutableDictionary new];
     _recipientWhitelist = [NSMutableSet new];
     _threadWhitelist = [NSMutableSet new];
-    _userProfileReadCache = [UserProfileReadCache new];
     _stubbedUuidCapabilitiesMap = [NSMutableDictionary new];
 
     return self;
@@ -89,10 +88,32 @@ NS_ASSUME_NONNULL_BEGIN
     // Do nothing.
 }
 
+- (void)setProfileGivenName:(nullable NSString *)firstName
+                 familyName:(nullable NSString *)lastName
+              avatarUrlPath:(nullable NSString *)avatarUrlPath
+                 forAddress:(nonnull SignalServiceAddress *)address
+        wasLocallyInitiated:(BOOL)wasLocallyInitiated
+                transaction:(nonnull SDSAnyWriteTransaction *)transaction
+{
+    // Do nothing.
+}
+
+- (nullable NSString *)fullNameForAddress:(SignalServiceAddress *)address
+                              transaction:(SDSAnyReadTransaction *)transaction
+{
+    return @"some fake profile name";
+}
+
 - (nullable NSData *)profileKeyDataForAddress:(SignalServiceAddress *)address
                                   transaction:(SDSAnyReadTransaction *)transaction
 {
     return self.profileKeys[address].keyData;
+}
+
+- (nullable OWSAES256Key *)profileKeyForAddress:(SignalServiceAddress *)address
+                                    transaction:(SDSAnyReadTransaction *)transaction
+{
+    return self.profileKeys[address];
 }
 
 - (BOOL)isUserInProfileWhitelist:(SignalServiceAddress *)address transaction:(SDSAnyReadTransaction *)transaction
@@ -185,14 +206,32 @@ NS_ASSUME_NONNULL_BEGIN
     }
 }
 
-- (void)fetchAndUpdateLocalUsersProfile
+- (void)fetchLocalUsersProfile
 {
     // Do nothing.
 }
 
-- (void)updateProfileForAddress:(nonnull SignalServiceAddress *)address
+- (AnyPromise *)fetchLocalUsersProfilePromise
 {
     // Do nothing.
+    return [AnyPromise promiseWithValue:nil];
+}
+
+- (void)fetchProfileForAddress:(nonnull SignalServiceAddress *)address
+{
+    // Do nothing.
+}
+
+- (AnyPromise *)fetchProfileForAddressPromise:(SignalServiceAddress *)address
+{
+    return [AnyPromise promiseWithValue:@(1)];
+}
+
+- (AnyPromise *)fetchProfileForAddressPromise:(SignalServiceAddress *)address
+                                  mainAppOnly:(BOOL)mainAppOnly
+                             ignoreThrottling:(BOOL)ignoreThrottling
+{
+    return [AnyPromise promiseWithValue:@(1)];
 }
 
 - (void)warmCaches
@@ -234,6 +273,65 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)localProfileExistsWithTransaction:(nonnull SDSAnyReadTransaction *)transaction
 {
     return self.hasLocalProfile;
+}
+
+- (void)updateProfileForAddress:(SignalServiceAddress *)address
+                      givenName:(nullable NSString *)givenName
+                     familyName:(nullable NSString *)familyName
+                            bio:(nullable NSString *)bio
+                       bioEmoji:(nullable NSString *)bioEmoji
+                       username:(nullable NSString *)username
+                  isUuidCapable:(BOOL)isUuidCapable
+                  avatarUrlPath:(nullable NSString *)avatarUrlPath
+    optionalDecryptedAvatarData:(nullable NSData *)optionalDecryptedAvatarData
+                  lastFetchDate:(NSDate *)lastFetchDate
+{
+    // Do nothing.
+}
+
+- (void)localProfileWasUpdated:(OWSUserProfile *)localUserProfile
+{
+    // Do nothing.
+}
+
+- (AnyPromise *)downloadAndDecryptProfileAvatarForProfileAddress:(SignalServiceAddress *)profileAddress
+                                                   avatarUrlPath:(NSString *)avatarUrlPath
+                                                      profileKey:(OWSAES256Key *)profileKey
+{
+    return [AnyPromise promiseWithValue:nil];
+}
+
+- (BOOL)hasProfileAvatarData:(SignalServiceAddress *)address transaction:(SDSAnyReadTransaction *)transaction
+{
+    return NO;
+}
+
+- (nullable NSData *)profileAvatarDataForAddress:(SignalServiceAddress *)address
+                                     transaction:(SDSAnyReadTransaction *)transaction
+{
+    return nil;
+}
+
+- (nullable NSString *)profileAvatarURLPathForAddress:(SignalServiceAddress *)address
+                                          transaction:(SDSAnyReadTransaction *)transaction
+{
+    return nil;
+}
+
+- (void)didSendOrReceiveMessageFromAddress:(SignalServiceAddress *)address
+                               transaction:(SDSAnyWriteTransaction *)transaction
+{
+    // Do nothing.
+}
+
+- (void)reuploadLocalProfile
+{
+    // Do nothing.
+}
+
+- (void)migrateWhitelistedGroupsWithTransaction:(SDSAnyWriteTransaction *)transaction
+{
+    // Do nothing.
 }
 
 @end

@@ -12,11 +12,15 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface SignalApp : NSObject
 
++ (instancetype)new NS_UNAVAILABLE;
 - (instancetype)init NS_UNAVAILABLE;
 
 + (instancetype)sharedApp;
 
 - (void)setup;
+
+@property (nonatomic, readonly) BOOL hasSelectedThread;
+@property (nonatomic, readonly) BOOL didLastLaunchNotTerminate;
 
 #pragma mark - Conversation Presentation
 
@@ -49,6 +53,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)showConversationSplitView;
 - (void)ensureRootViewController:(NSTimeInterval)launchStartedAt;
 - (BOOL)receivedVerificationCode:(NSString *)verificationCode;
+- (void)applicationWillTerminate;
+
+- (nullable UIView *)snapshotSplitViewControllerAfterScreenUpdates:(BOOL)afterScreenUpdates;
 
 @end
 

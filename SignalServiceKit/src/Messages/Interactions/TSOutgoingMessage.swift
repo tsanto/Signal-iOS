@@ -10,54 +10,21 @@ import Foundation
 // * Handle that property for received sync transcripts.
 // * Handle that property in the test factories.
 @objc
-public class TSOutgoingMessageBuilder: NSObject {
-    @objc
-    public let thread: TSThread
-    @objc
-    public var timestamp: UInt64 = NSDate.ows_millisecondTimeStamp()
-    @objc
-    public var messageBody: String?
-    @objc
-    public var attachmentIds = NSMutableArray()
-    @objc
-    public var expiresInSeconds: UInt32 = 0
-    @objc
-    public var expireStartedAt: UInt64 = 0
+public class TSOutgoingMessageBuilder: TSMessageBuilder {
     @objc
     public var isVoiceMessage = false
     @objc
     public var groupMetaMessage: TSGroupMetaMessage = .unspecified
     @objc
-    public var quotedMessage: TSQuotedMessage?
-    @objc
-    public var contactShare: OWSContact?
-    @objc
-    public var linkPreview: OWSLinkPreview?
-    @objc
-    public var messageSticker: MessageSticker?
-    @objc
-    public var isViewOnceMessage = false
-    @objc
     public var changeActionsProtoData: Data?
     @objc
     public var additionalRecipients: [SignalServiceAddress]?
 
-    @objc
-    public required init(thread: TSThread) {
-        self.thread = thread
-    }
-
-    @objc
-    public required init(thread: TSThread,
-                         messageBody: String?) {
-        self.thread = thread
-        self.messageBody = messageBody
-    }
-
     public required init(thread: TSThread,
                          timestamp: UInt64? = nil,
                          messageBody: String? = nil,
-                         attachmentIds: NSMutableArray? = nil,
+                         bodyRanges: MessageBodyRanges? = nil,
+                         attachmentIds: [String]? = nil,
                          expiresInSeconds: UInt32 = 0,
                          expireStartedAt: UInt64 = 0,
                          isVoiceMessage: Bool = false,
@@ -69,26 +36,36 @@ public class TSOutgoingMessageBuilder: NSObject {
                          isViewOnceMessage: Bool = false,
                          changeActionsProtoData: Data? = nil,
                          additionalRecipients: [SignalServiceAddress]? = nil) {
-        self.thread = thread
 
-        if let timestamp = timestamp {
-            self.timestamp = timestamp
-        }
-        self.messageBody = messageBody
-        if let attachmentIds = attachmentIds {
-            self.attachmentIds = attachmentIds
-        }
-        self.expiresInSeconds = expiresInSeconds
-        self.expireStartedAt = expireStartedAt
+        super.init(thread: thread,
+                   timestamp: timestamp,
+                   messageBody: messageBody,
+                   bodyRanges: bodyRanges,
+                   attachmentIds: attachmentIds,
+                   expiresInSeconds: expiresInSeconds,
+                   expireStartedAt: expireStartedAt,
+                   quotedMessage: quotedMessage,
+                   contactShare: contactShare,
+                   linkPreview: linkPreview,
+                   messageSticker: messageSticker,
+                   isViewOnceMessage: isViewOnceMessage)
+
         self.isVoiceMessage = isVoiceMessage
         self.groupMetaMessage = groupMetaMessage
-        self.quotedMessage = quotedMessage
-        self.contactShare = contactShare
-        self.linkPreview = linkPreview
-        self.messageSticker = messageSticker
-        self.isViewOnceMessage = isViewOnceMessage
         self.changeActionsProtoData = changeActionsProtoData
         self.additionalRecipients = additionalRecipients
+    }
+
+    @objc
+    public class func outgoingMessageBuilder(thread: TSThread) -> TSOutgoingMessageBuilder {
+        return TSOutgoingMessageBuilder(thread: thread)
+    }
+
+    @objc
+    public class func outgoingMessageBuilder(thread: TSThread,
+                                             messageBody: String?) -> TSOutgoingMessageBuilder {
+        return TSOutgoingMessageBuilder(thread: thread,
+                                        messageBody: messageBody)
     }
 
     // This factory method can be used at call sites that want
@@ -98,7 +75,8 @@ public class TSOutgoingMessageBuilder: NSObject {
     public class func builder(thread: TSThread,
                               timestamp: UInt64,
                               messageBody: String?,
-                              attachmentIds: NSMutableArray?,
+                              bodyRanges: MessageBodyRanges?,
+                              attachmentIds: [String]?,
                               expiresInSeconds: UInt32,
                               expireStartedAt: UInt64,
                               isVoiceMessage: Bool,
@@ -113,6 +91,7 @@ public class TSOutgoingMessageBuilder: NSObject {
         return TSOutgoingMessageBuilder(thread: thread,
                                         timestamp: timestamp,
                                         messageBody: messageBody,
+                                        bodyRanges: bodyRanges,
                                         attachmentIds: attachmentIds,
                                         expiresInSeconds: expiresInSeconds,
                                         expireStartedAt: expireStartedAt,
@@ -127,13 +106,6 @@ public class TSOutgoingMessageBuilder: NSObject {
                                         additionalRecipients: additionalRecipients)
     }
 
-    @objc(applyDisappearingMessagesConfiguration:)
-    public func apply(configuration: OWSDisappearingMessagesConfiguration) {
-        expiresInSeconds = (configuration.isEnabled
-            ? configuration.durationSeconds
-            : 0)
-    }
-
     private var hasBuilt = false
 
     @objc
@@ -143,5 +115,15 @@ public class TSOutgoingMessageBuilder: NSObject {
         }
         hasBuilt = true
         return TSOutgoingMessage(outgoingMessageWithBuilder: self)
+    }
+}
+
+public extension TSOutgoingMessage {
+    @objc func failedRecipientAddresses(errorCode: OWSErrorCode) -> [SignalServiceAddress] {
+        guard let states = recipientAddressStates else { return [] }
+
+        return states.filter { _, state in
+            return state.state == .failed && state.errorCode?.intValue == errorCode.rawValue
+        }.map { $0.key }
     }
 }
